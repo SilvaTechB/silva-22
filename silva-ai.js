@@ -1,4 +1,4 @@
-// ✅ Fixed Silva AI WhatsApp Bot - Complete Script
+// ✅ Silva AI WhatsApp Bot - OpenAI Only Version
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
@@ -19,65 +19,52 @@ const port = process.env.PORT || 25680;
 const pluginsDir = path.join(__dirname, 'plugins');
 const logDir = path.join(__dirname, 'logs');
 
-// AI Configuration - FIXED WITH RELIABLE MODELS
-const AI_PROVIDERS = {
-  DEEPSEEK: {
-    endpoint: 'https://api.deepseek.com/v1/chat/completions',
-    models: ['deepseek-chat'],  // Only reliable model
-    headers: { 'Authorization': `Bearer ${config.DEEPSEEK_API_KEY}` }
-  },
-  OPENAI: {
+// ✅ OpenAI Configuration
+const AI_PROVIDER = {
     endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-3.5-turbo', 'gpt-4'],  // Fallback models
+    models: ['gpt-4', 'gpt-3.5-turbo'], // fallback models
     headers: { 'Authorization': `Bearer ${config.OPENAI_API_KEY}` }
-  }
 };
 
 // Memory System
 class MemoryManager {
-  constructor() {
-    this.memoryPath = path.join(__dirname, 'conversation_memory.json');
-    this.conversations = this.loadMemory();
-    this.maxHistory = config.MAX_HISTORY || 10;
-  }
-
-  loadMemory() {
-    try {
-      return fs.existsSync(this.memoryPath) ? 
-        JSON.parse(fs.readFileSync(this.memoryPath)) : {};
-    } catch (e) {
-      console.error('Memory load error:', e);
-      return {};
+    constructor() {
+        this.memoryPath = path.join(__dirname, 'conversation_memory.json');
+        this.conversations = this.loadMemory();
+        this.maxHistory = config.MAX_HISTORY || 10;
     }
-  }
-
-  saveMemory() {
-    try {
-      fs.writeFileSync(this.memoryPath, JSON.stringify(this.conversations, null, 2));
-    } catch (e) {
-      console.error('Memory save error:', e);
+    loadMemory() {
+        try {
+            return fs.existsSync(this.memoryPath) ? 
+                JSON.parse(fs.readFileSync(this.memoryPath)) : {};
+        } catch (e) {
+            console.error('Memory load error:', e);
+            return {};
+        }
     }
-  }
-
-  getConversation(jid) {
-    return this.conversations[jid] || [];
-  }
-
-  addMessage(jid, role, content) {
-    if (!this.conversations[jid]) this.conversations[jid] = [];
-    this.conversations[jid].push({ role, content, timestamp: Date.now() });
-    if (this.conversations[jid].length > this.maxHistory) {
-      this.conversations[jid].shift();
+    saveMemory() {
+        try {
+            fs.writeFileSync(this.memoryPath, JSON.stringify(this.conversations, null, 2));
+        } catch (e) {
+            console.error('Memory save error:', e);
+        }
     }
-    this.saveMemory();
-  }
-
-  clearConversation(jid) {
-    delete this.conversations[jid];
-    this.saveMemory();
-  }
+    getConversation(jid) {
+        return this.conversations[jid] || [];
+    }
+    addMessage(jid, role, content) {
+        if (!this.conversations[jid]) this.conversations[jid] = [];
+        this.conversations[jid].push({ role, content, timestamp: Date.now() });
+        if (this.conversations[jid].length > this.maxHistory) {
+            this.conversations[jid].shift();
+        }
+        this.saveMemory();
+    }
+    clearConversation(jid) {
+        delete this.conversations[jid];
+        this.saveMemory();
+    }
 }
-
 const memoryManager = new MemoryManager();
 
 // Global Context Info
@@ -91,7 +78,7 @@ const globalContextInfo = {
     },
     externalAdReply: {
         title: `✦ ${config.BOT_NAME} ✦`,
-        body: "Powered by DeepSeek & OpenAI",
+        body: "Powered by OpenAI",
         thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
         sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
         mediaType: 1,
@@ -113,13 +100,10 @@ function getLogFileName() {
     const date = new Date();
     return `messages-${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}.log`;
 }
-
 function logMessage(type, message) {
     if (!config.DEBUG && type === 'DEBUG') return;
-    
     const timestamp = new Date().toISOString();
     const logEntry = `[${timestamp}] [${type}] ${message}\n`;
-    
     console.log(logEntry.trim());
     fs.appendFileSync(path.join(logDir, getLogFileName()), logEntry);
 }
@@ -167,199 +151,49 @@ async function setupSession() {
     }
 }
 
-// Helper Functions
-function generateConfigTable() {
-    const configs = [
-        { name: 'MODE', value: config.MODE },
-        { name: 'ANTIDELETE_GROUP', value: config.ANTIDELETE_GROUP },
-        { name: 'ANTIDELETE_PRIVATE', value: config.ANTIDELETE_PRIVATE },
-        { name: 'AUTO_STATUS_SEEN', value: config.AUTO_STATUS_SEEN },
-        { name: 'AUTO_STATUS_REACT', value: config.AUTO_STATUS_REACT },
-        { name: 'AUTO_STATUS_REPLY', value: config.AUTO_STATUS_REPLY },
-        { name: 'AUTO_REACT_NEWSLETTER', value: config.AUTO_REACT_NEWSLETTER },
-        { name: 'ANTI_LINK', value: config.ANTI_LINK },
-        { name: 'ALWAYS_ONLINE', value: config.ALWAYS_ONLINE },
-        { name: 'GROUP_COMMANDS', value: config.GROUP_COMMANDS }
-    ];
-
-    let table = '╔══════════════════════════╦═══════════╗\n';
-    table += '║        Config Name       ║   Value   ║\n';
-    table += '╠══════════════════════════╬═══════════╣\n';
-
-    for (const config of configs) {
-        const paddedName = config.name.padEnd(24, ' ');
-        const paddedValue = String(config.value).padEnd(9, ' ');
-        table += `║ ${paddedName} ║ ${paddedValue} ║\n`;
-    }
-
-    table += '╚══════════════════════════╩═══════════╝';
-    return table;
-}
-
-function generateFancyBio() {
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('en-KE', { 
-        weekday: 'long', 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
-    });
-    
-    const timeStr = now.toLocaleTimeString('en-KE', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
-    });
-    
-    const bios = [
-        `✨ ${config.BOT_NAME} ✦ Online ✦ ${dateStr} ✦`,
-        `⚡ Silva MD Active ✦ ${timeStr} ✦ ${dateStr} ✦`,
-        `💫 ${config.BOT_NAME} Operational ✦ ${dateStr} ✦`,
-        `🚀 Silva MD Live ✦ ${dateStr} ✦ ${timeStr} ✦`,
-        `🌟 ${config.BOT_NAME} Running ✦ ${dateStr} ✦`
-    ];
-    
-    return bios[Math.floor(Math.random() * bios.length)];
-}
-
-function isBotMentioned(message, botJid) {
-    if (!message || !botJid) return false;
-    
-    if (message.extendedTextMessage) {
-        const mentionedJids = message.extendedTextMessage.contextInfo?.mentionedJid || [];
-        return mentionedJids.includes(botJid);
-    }
-    
-    if (message.conversation) {
-        const botNumber = botJid.split('@')[0];
-        return message.conversation.includes(`@${botNumber}`);
-    }
-    
-    return false;
-}
-
-// AI Functions - COMPREHENSIVE FIX
+// ✅ AI Response Function (OpenAI Only)
 async function getAIResponse(jid, userMessage) {
-  // Check provider configuration
-  const isProviderConfigured = (provider) => {
-    return provider && provider.headers && provider.headers.Authorization && 
-           provider.headers.Authorization.startsWith('Bearer ');
-  };
+    try {
+        const history = memoryManager.getConversation(jid);
+        const messages = [
+            {
+                role: 'system',
+                content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}.`
+            },
+            ...history.map(msg => ({ role: msg.role, content: msg.content })),
+            { role: 'user', content: userMessage }
+        ];
 
-  // Detect balance errors
-  const isBalanceError = (error) => {
-    if (!error.response) return false;
-    const status = error.response.status;
-    if ([402, 403, 429].includes(status)) return true;
-    
-    if (error.response.data?.error?.message) {
-      const msg = error.response.data.error.message.toLowerCase();
-      return ['insufficient', 'balance', 'quota', 'limit', 'credit'].some(word => msg.includes(word));
-    }
-    return false;
-  };
+        let aiResponse;
+        for (const model of AI_PROVIDER.models) {
+            try {
+                const response = await axios.post(AI_PROVIDER.endpoint, {
+                    model,
+                    messages,
+                    max_tokens: 1500,
+                    temperature: 0.7
+                }, { headers: AI_PROVIDER.headers, timeout: 30000 });
 
-  // Detect model errors
-  const isModelError = (error) => {
-    if (!error.response) return false;
-    if ([404, 400].includes(error.response.status)) return true;
-    
-    if (error.response.data?.error?.message) {
-      const msg = error.response.data.error.message.toLowerCase();
-      return msg.includes('model') || msg.includes('does not exist') || msg.includes('access');
-    }
-    return false;
-  };
-
-  try {
-    const history = memoryManager.getConversation(jid);
-    const messages = [
-      {
-        role: 'system',
-        content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}. ` +
-                 `User's name: ${jid.split('@')[0]}. Respond conversationally.`
-      },
-      ...history.map(msg => ({ role: msg.role, content: msg.content })),
-      { role: 'user', content: userMessage }
-    ];
-
-    let aiResponse;
-    let lastError;
-    let lastProvider;
-    
-    // Determine active providers
-    const activeProviders = [];
-    if (isProviderConfigured(AI_PROVIDERS.DEEPSEEK)) activeProviders.push('DEEPSEEK');
-    if (isProviderConfigured(AI_PROVIDERS.OPENAI)) activeProviders.push('OPENAI');
-    
-    if (activeProviders.length === 0) {
-      throw new Error('No AI providers configured');
-    }
-    
-    // Try providers and models
-    providerLoop: for (const providerName of activeProviders) {
-      const provider = AI_PROVIDERS[providerName];
-      const models = provider.models || [];
-      
-      for (const model of models) {
-        try {
-          logMessage('DEBUG', `Trying ${providerName} model: ${model}`);
-          const response = await axios.post(provider.endpoint, {
-            model,
-            messages,
-            max_tokens: 1500,
-            temperature: 0.7
-          }, { 
-            headers: provider.headers,
-            timeout: 30000
-          });
-
-          aiResponse = response.data.choices[0].message.content;
-          lastProvider = `${providerName} (${model})`;
-          break providerLoop; // Exit both loops on success
-        } catch (error) {
-          lastError = error;
-          lastProvider = `${providerName} (${model})`;
-          
-          if (isBalanceError(error)) {
-            logMessage('WARN', `⚠️ ${providerName} balance error - trying next option`);
-          } 
-          else if (isModelError(error)) {
-            logMessage('WARN', `⚠️ ${providerName} model error - trying next model`);
-          } 
-          else {
-            logMessage('ERROR', `⚠️ ${providerName} API error: ${error.message}`);
-            break; // Move to next provider on non-model errors
-          }
+                aiResponse = response.data.choices[0].message.content;
+                break; // success
+            } catch (error) {
+                logMessage('WARN', `OpenAI model error: ${error.message}`);
+            }
         }
-      }
-    }
 
-    if (!aiResponse) {
-      throw lastError || new Error('All AI providers failed');
+        if (!aiResponse) throw new Error('All OpenAI models failed.');
+
+        memoryManager.addMessage(jid, 'user', userMessage);
+        memoryManager.addMessage(jid, 'assistant', aiResponse);
+
+        return aiResponse;
+    } catch (error) {
+        logMessage('ERROR', `AI Failed: ${error.message}`);
+        return "⚠️ Sorry, I'm unable to process your request right now.";
     }
-    
-    memoryManager.addMessage(jid, 'user', userMessage);
-    memoryManager.addMessage(jid, 'assistant', aiResponse);
-    
-    logMessage('SUCCESS', `✅ AI response from ${lastProvider}`);
-    return aiResponse;
-  } catch (error) {
-    const errorMsg = error.response?.data?.error?.message || error.message;
-    logMessage('ERROR', `AI Failed: ${errorMsg}`);
-    
-    // User-friendly error messages
-    if (errorMsg.includes('insufficient')) {
-      return "⚠️ My AI service is currently unavailable. Please contact my administrator.";
-    } else if (errorMsg.includes('model')) {
-      return "⚠️ I'm experiencing technical difficulties. Please try a different question.";
-    } else {
-      return "⚠️ Sorry, I'm unable to process your request right now. Please try again later.";
-    }
-  }
 }
 
-// WhatsApp Connection - IMPROVED ERROR HANDLING
+// WhatsApp Connection
 async function connectToWhatsApp() {
     try {
         await setupSession();
@@ -373,15 +207,7 @@ async function connectToWhatsApp() {
             auth: state,
             version,
             markOnlineOnConnect: config.ALWAYS_ONLINE,
-            syncFullHistory: false,
-            generateHighQualityLinkPreview: false,
-            getMessage: async () => undefined,
-            maxSharedKeys: 1000,
-            sessionThreshold: 0,
-            cache: {
-                TRANSACTION: false,
-                PRE_KEYS: false
-            }
+            syncFullHistory: false
         });
 
         sock.ev.on('connection.update', async update => {
@@ -389,10 +215,9 @@ async function connectToWhatsApp() {
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 logMessage('WARN', `Connection closed: ${statusCode || 'Unknown'}`);
-                
                 if (statusCode === DisconnectReason.loggedOut) {
                     logMessage('CRITICAL', '❌ Session logged out. Please rescan QR code.');
-                } else if (statusCode !== DisconnectReason.restartRequired) {
+                } else {
                     logMessage('INFO', 'Reconnecting...');
                     setTimeout(() => connectToWhatsApp(), 10000);
                 }
@@ -406,87 +231,33 @@ async function connectToWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Message Handling
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
-            
             const m = messages[0];
             if (!m.message) return;
 
             const sender = m.key.remoteJid;
             const isGroup = isJidGroup(sender);
-            const isNewsletter = sender.endsWith('@newsletter');
-            
-            // Log incoming message
-            logMessage('MESSAGE', `New ${isNewsletter ? 'newsletter' : isGroup ? 'group' : 'private'} message from ${sender}`);
-            
-            // Auto-react to newsletter messages
-            if (isNewsletter && config.AUTO_REACT_NEWSLETTER) {
-                try {
-                    await sock.sendMessage(sender, {
-                        react: {
-                            text: '🤖',
-                            key: m.key
-                        }
-                    });
-                } catch (e) {
-                    logMessage('ERROR', `Newsletter react failed: ${e.message}`);
-                }
-            }
-            
-            // Skip processing if group commands are disabled
+
             if (isGroup && !config.GROUP_COMMANDS) return;
-            
-            // Extract content
+
             const messageType = Object.keys(m.message)[0];
             let content = '';
-            let isMentioned = false;
-            
-            if (messageType === 'conversation') {
-                content = m.message.conversation;
-            } else if (messageType === 'extendedTextMessage') {
-                content = m.message.extendedTextMessage.text || '';
-                if (isGroup && global.botJid) {
-                    isMentioned = isBotMentioned(m.message, global.botJid);
-                }
-            } else if (messageType === 'imageMessage') {
-                content = m.message.imageMessage.caption || '';
-            } else if (messageType === 'videoMessage') {
-                content = m.message.videoMessage.caption || '';
-            } else if (messageType === 'documentMessage') {
-                content = m.message.documentMessage.caption || '';
-            } else {
-                return;
-            }
-            
-            // Always respond in private chats, in groups only when mentioned
-            const shouldRespond = !isGroup || (isGroup && isMentioned);
-            if (!shouldRespond) return;
-            
-            // If mentioned, remove mention from content
-            if (isMentioned) {
-                const botNumber = global.botJid.split('@')[0];
-                content = content.replace(new RegExp(`@${botNumber}\\s*`, 'i'), '').trim();
-            }
-            
-            // Handle AI Response
+            if (messageType === 'conversation') content = m.message.conversation;
+            else if (messageType === 'extendedTextMessage') content = m.message.extendedTextMessage.text || '';
+            else if (messageType === 'imageMessage') content = m.message.imageMessage.caption || '';
+            else if (messageType === 'videoMessage') content = m.message.videoMessage.caption || '';
+
+            if (!content) return;
+
             if (config.READ_MESSAGE) await sock.readMessages([m.key]);
-            
+
             try {
                 const aiResponse = await getAIResponse(sender, content);
-                
-                await sock.sendMessage(sender, {
-                    text: aiResponse,
-                    contextInfo: globalContextInfo
-                }, { quoted: m });
-                
-                logMessage('AI', `Response sent: ${aiResponse.substring(0, 100)}`);
+                await sock.sendMessage(sender, { text: aiResponse, contextInfo: globalContextInfo }, { quoted: m });
             } catch (err) {
                 logMessage('ERROR', `AI Processing Error: ${err.message}`);
-                await sock.sendMessage(sender, {
-                    text: "⚠️ I encountered an error processing your request.",
-                    contextInfo: globalContextInfo
-                }, { quoted: m });
+                await sock.sendMessage(sender, { text: "⚠️ AI error occurred.", contextInfo: globalContextInfo }, { quoted: m });
             }
         });
 
@@ -497,10 +268,9 @@ async function connectToWhatsApp() {
     }
 }
 
-// Profile Functions
 async function updateProfileStatus(sock) {
+    const bio = `✨ ${config.BOT_NAME} Online ✦ ${new Date().toLocaleString()}`;
     try {
-        const bio = generateFancyBio();
         await sock.updateProfileStatus(bio);
         logMessage('SUCCESS', `✅ Bio updated: ${bio}`);
     } catch (err) {
@@ -509,30 +279,9 @@ async function updateProfileStatus(sock) {
 }
 
 async function sendWelcomeMessage(sock) {
-    const configTable = generateConfigTable();
-    
-    const welcomeMsg = `*Hello ✦ ${config.BOT_NAME} ✦ User!*\n\n` +
-        `✅ Silva AI Bot is now active!\n\n` +
-        `*Mode:* ${config.MODE}\n` +
-        `*Plugins Loaded:* ${plugins.size}\n\n` +
-        `*⚙️ Configuration Status:*\n\`\`\`${configTable}\`\`\`\n\n` +
-        `*Description:* ${config.DESCRIPTION}\n\n` +
-        `⚡ Powered by Silva Tech Inc\nGitHub: https://github.com/SilvaTechB/silva-md-bot`;
-
     await sock.sendMessage(sock.user.id, {
         image: { url: config.ALIVE_IMG },
-        caption: welcomeMsg,
-        contextInfo: {
-            ...globalContextInfo,
-            externalAdReply: {
-                title: `✦ ${config.BOT_NAME} ✦ Official`,
-                body: "Your AI assistant is ready!",
-                thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
-                sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
-                mediaType: 1,
-                renderLargerThumbnail: true
-            }
-        }
+        caption: `✅ ${config.BOT_NAME} is running!\nPowered by OpenAI.\nMode: ${config.MODE}`
     });
 }
 
@@ -540,16 +289,6 @@ async function sendWelcomeMessage(sock) {
 const app = express();
 app.get('/', (req, res) => res.send(`✅ ${config.BOT_NAME} is Running!`));
 app.listen(port, () => logMessage('INFO', `🌐 Server running on port ${port}`));
-
-// Error Handling
-process.on('uncaughtException', (err) => {
-    logMessage('CRITICAL', `Uncaught Exception: ${err.stack}`);
-    setTimeout(() => connectToWhatsApp(), 5000);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    logMessage('CRITICAL', `Unhandled Rejection: ${reason} at ${promise}`);
-});
 
 // Start Bot
 (async () => {
