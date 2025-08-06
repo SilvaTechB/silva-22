@@ -256,26 +256,12 @@ async function getAIResponse(jid, userMessage) {
     const provider = config.PREFERRED_AI === 'OPENAI' ? 
       AI_PROVIDERS.OPENAI : AI_PROVIDERS.DEEPSEEK;
 
-    // Check API key balance before making request
-    if (!provider.headers.Authorization || provider.headers.Authorization.includes('undefined')) {
-      throw new Error('API key not configured');
-    }
-
     const response = await axios.post(provider.endpoint, {
       model: provider.model,
       messages,
       max_tokens: 1500,
       temperature: 0.7
-    }, { 
-      headers: provider.headers,
-      validateStatus: function (status) {
-        return status < 500; // Reject only if status code is >= 500
-      }
-    });
-
-    if (response.data.error) {
-      throw new Error(response.data.error.message || 'Unknown API error');
-    }
+    }, { headers: provider.headers });
 
     const aiResponse = response.data.choices[0].message.content;
     
@@ -286,14 +272,13 @@ async function getAIResponse(jid, userMessage) {
   } catch (error) {
     console.error('AI Error:', error.response?.data || error.message);
     
-    // More specific error messages
-    if (error.message.includes('Insufficient Balance') || error.message.includes('insufficient_quota')) {
+    // Handle insufficient balance error specifically
+    if (error.response?.data?.error?.message === 'Insufficient Balance' || 
+        error.response?.data?.error?.code === 'invalid_request_error') {
       return "⚠️ Sorry, my API quota has been exhausted. Please contact my administrator.";
-    } else if (error.message.includes('API key not configured')) {
-      return "⚠️ API service is currently unavailable. Please try again later.";
-    } else {
-      return "⚠️ Sorry, I'm having trouble responding right now. Please try again later.";
     }
+    
+    return "⚠️ Sorry, I'm having trouble responding right now. Please try again later.";
   }
 }
 
