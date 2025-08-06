@@ -1,10 +1,10 @@
 {
-  "name": "silva-ai",
+  "name": "silva-md-bot",
   "version": "1.0.0",
-  "description": "Silva ai WhatsApp Bot using Baileys",
-  "main": "silva-ai.js",
+  "description": "Silva MD WhatsApp Bot using Baileys",
+  "main": "silva.js",
   "scripts": {
-    "start": "node silva-ai.js"
+    "start": "node silva.js"
   },
   "engines": {
     "node": "20.x"
@@ -67,6 +67,7 @@
     "node-gtts": "^2.0.2",
     "node-webpmux": "^3.1.3",
     "os": "*",
+    "p-queue": "^8.1.0",
     "pdfkit": "^0.13.0",
     "perf_hooks": "*",
     "pino": "^8.21.0",
