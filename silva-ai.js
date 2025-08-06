@@ -78,7 +78,7 @@ const globalContextInfo = {
     },
     externalAdReply: {
         title: `✦ ${config.BOT_NAME} ✦`,
-        body: "Powered by OpenAI",
+        body: "Powered by SilvaTechInc",
         thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
         sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
         mediaType: 1,
