@@ -1,4 +1,4 @@
-// ✅ Silva AI WhatsApp Bot - OpenAI Only Version
+// ✅ Silva AI WhatsApp Bot - Fixed Version with Queue & Backoff
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
@@ -10,23 +10,29 @@ const os = require('os');
 const express = require('express');
 const P = require('pino');
 const axios = require('axios');
+const PQueue = require('p-queue'); // ✅ Rate Limiter
 const config = require('./config.js');
 
-// Constants
+// ✅ Constants
 const prefix = config.PREFIX || '.';
 const tempDir = path.join(os.tmpdir(), 'silva-cache');
 const port = process.env.PORT || 25680;
 const pluginsDir = path.join(__dirname, 'plugins');
 const logDir = path.join(__dirname, 'logs');
 
-// ✅ OpenAI Configuration
+// ✅ AI Configuration
 const AI_PROVIDER = {
     endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4o', 'gpt-4o-mini'], // fallback models
+    models: ['gpt-4o', 'gpt-4o-mini'], // ✅ fallback models
     headers: { 'Authorization': `Bearer ${config.OPENAI_API_KEY}` }
 };
 
-// Memory System
+// ✅ Rate Limiter & Spam Control
+const aiQueue = new PQueue({ interval: 1000, intervalCap: 1 }); // 1 request/sec
+const userCooldown = new Map(); // { jid: timestamp }
+const COOLDOWN_MS = 5000; // 5 sec per user
+
+// ✅ Memory System
 class MemoryManager {
     constructor() {
         this.memoryPath = path.join(__dirname, 'conversation_memory.json');
@@ -67,7 +73,7 @@ class MemoryManager {
 }
 const memoryManager = new MemoryManager();
 
-// Global Context Info
+// ✅ Global Context Info
 const globalContextInfo = {
     forwardingScore: 999,
     isForwarded: true,
@@ -86,16 +92,16 @@ const globalContextInfo = {
     }
 };
 
-// Setup Directories
+// ✅ Setup Directories
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// Clean temp files periodically
+// ✅ Clean temp files periodically
 setInterval(() => {
     fs.readdirSync(tempDir).forEach(file => fs.unlinkSync(path.join(tempDir, file)));
 }, 5 * 60 * 1000);
 
-// Logger Functions
+// ✅ Logger Functions
 function getLogFileName() {
     const date = new Date();
     return `messages-${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}.log`;
@@ -108,95 +114,70 @@ function logMessage(type, message) {
     fs.appendFileSync(path.join(logDir, getLogFileName()), logEntry);
 }
 
-// Load Plugins
-let plugins = new Map();
-function loadPlugins() {
-    if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
-    const files = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
-    plugins.clear();
-    for (const file of files) {
-        delete require.cache[require.resolve(path.join(pluginsDir, file))];
-        const plugin = require(path.join(pluginsDir, file));
-        plugins.set(file.replace('.js', ''), plugin);
-    }
-    logMessage('INFO', `✅ Loaded ${plugins.size} plugins`);
-}
-loadPlugins();
-
-// Session Setup
-async function setupSession() {
-    const sessionPath = path.join(__dirname, 'sessions', 'creds.json');
-    if (!fs.existsSync(sessionPath)) {
-        if (!config.SESSION_ID || !config.SESSION_ID.startsWith('Silva~')) {
-            throw new Error('Invalid or missing SESSION_ID. Must start with Silva~');
-        }
-        logMessage('INFO', '⬇ Downloading session from Mega.nz...');
-        const megaCode = config.SESSION_ID.replace('Silva~', '');
-        
-        const mega = require('megajs');
-        const file = mega.File.fromURL(`https://mega.nz/file/${megaCode}`);
-        
-        await new Promise((resolve, reject) => {
-            file.download((err, data) => {
-                if (err) {
-                    logMessage('ERROR', `❌ Mega download failed: ${err.message}`);
-                    return reject(err);
-                }
-                fs.mkdirSync(path.join(__dirname, 'sessions'), { recursive: true });
-                fs.writeFileSync(sessionPath, data);
-                logMessage('SUCCESS', '✅ Session downloaded and saved.');
-                resolve();
-            });
-        });
-    }
-}
-
-// ✅ AI Response Function (OpenAI Only)
+// ✅ AI Response with Queue + Backoff
 async function getAIResponse(jid, userMessage) {
-    try {
-        const history = memoryManager.getConversation(jid);
-        const messages = [
-            {
-                role: 'system',
-                content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}.`
-            },
-            ...history.map(msg => ({ role: msg.role, content: msg.content })),
-            { role: 'user', content: userMessage }
-        ];
-
-        let aiResponse;
-        for (const model of AI_PROVIDER.models) {
-            try {
-                const response = await axios.post(AI_PROVIDER.endpoint, {
-                    model,
-                    messages,
-                    max_tokens: 1500,
-                    temperature: 0.7
-                }, { headers: AI_PROVIDER.headers, timeout: 30000 });
-
-                aiResponse = response.data.choices[0].message.content;
-                break; // success
-            } catch (error) {
-                logMessage('WARN', `OpenAI model error: ${error.message}`);
+    return aiQueue.add(async () => {
+        try {
+            // ✅ Check Cooldown
+            const now = Date.now();
+            if (userCooldown.has(jid) && now - userCooldown.get(jid) < COOLDOWN_MS) {
+                return "⚠️ Please wait a few seconds before asking again.";
             }
+            userCooldown.set(jid, now);
+
+            const history = memoryManager.getConversation(jid);
+            const messages = [
+                { role: 'system', content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}.` },
+                ...history.map(msg => ({ role: msg.role, content: msg.content })),
+                { role: 'user', content: userMessage }
+            ];
+
+            let aiResponse;
+            let lastError;
+
+            for (const model of AI_PROVIDER.models) {
+                try {
+                    const response = await axios.post(AI_PROVIDER.endpoint, {
+                        model,
+                        messages,
+                        max_tokens: 1500,
+                        temperature: 0.7
+                    }, { headers: AI_PROVIDER.headers, timeout: 30000 });
+
+                    aiResponse = response.data.choices[0].message.content;
+                    break; // ✅ success
+                } catch (error) {
+                    lastError = error;
+                    const status = error.response?.status;
+
+                    if (status === 429) {
+                        logMessage('WARN', `Rate limit hit for ${model}, retrying in 5s...`);
+                        await new Promise(res => setTimeout(res, 5000));
+                    } else {
+                        logMessage('WARN', `Model ${model} failed: ${error.message}`);
+                    }
+                }
+            }
+
+            if (!aiResponse) {
+                logMessage('ERROR', `OpenAI Failed: ${lastError?.message}`);
+                aiResponse = `⚠️ I'm currently overloaded. Please try again later.`;
+            }
+
+            memoryManager.addMessage(jid, 'user', userMessage);
+            memoryManager.addMessage(jid, 'assistant', aiResponse);
+
+            return aiResponse;
+        } catch (error) {
+            logMessage('ERROR', `AI Failed: ${error.message}`);
+            return "⚠️ Sorry, I'm unable to process your request right now.";
         }
-
-        if (!aiResponse) throw new Error('All OpenAI models failed.');
-
-        memoryManager.addMessage(jid, 'user', userMessage);
-        memoryManager.addMessage(jid, 'assistant', aiResponse);
-
-        return aiResponse;
-    } catch (error) {
-        logMessage('ERROR', `AI Failed: ${error.message}`);
-        return "⚠️ Sorry, I'm unable to process your request right now.";
-    }
+    });
 }
 
-// WhatsApp Connection
+// ✅ WhatsApp Connection
 async function connectToWhatsApp() {
     try {
-        await setupSession();
         const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions'));
         const { version } = await fetchLatestBaileysVersion();
 
@@ -215,15 +196,9 @@ async function connectToWhatsApp() {
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 logMessage('WARN', `Connection closed: ${statusCode || 'Unknown'}`);
-                if (statusCode === DisconnectReason.loggedOut) {
-                    logMessage('CRITICAL', '❌ Session logged out. Please rescan QR code.');
-                } else {
-                    logMessage('INFO', 'Reconnecting...');
-                    setTimeout(() => connectToWhatsApp(), 10000);
-                }
+                setTimeout(() => connectToWhatsApp(), 10000);
             } else if (connection === 'open') {
                 logMessage('SUCCESS', '✅ Connected to WhatsApp');
-                global.botJid = sock.user.id;
                 await updateProfileStatus(sock);
                 await sendWelcomeMessage(sock);
             }
@@ -238,7 +213,6 @@ async function connectToWhatsApp() {
 
             const sender = m.key.remoteJid;
             const isGroup = isJidGroup(sender);
-
             if (isGroup && !config.GROUP_COMMANDS) return;
 
             const messageType = Object.keys(m.message)[0];
@@ -247,7 +221,6 @@ async function connectToWhatsApp() {
             else if (messageType === 'extendedTextMessage') content = m.message.extendedTextMessage.text || '';
             else if (messageType === 'imageMessage') content = m.message.imageMessage.caption || '';
             else if (messageType === 'videoMessage') content = m.message.videoMessage.caption || '';
-
             if (!content) return;
 
             if (config.READ_MESSAGE) await sock.readMessages([m.key]);
@@ -285,12 +258,12 @@ async function sendWelcomeMessage(sock) {
     });
 }
 
-// Express Server
+// ✅ Express Server
 const app = express();
 app.get('/', (req, res) => res.send(`✅ ${config.BOT_NAME} is Running!`));
 app.listen(port, () => logMessage('INFO', `🌐 Server running on port ${port}`));
 
-// Start Bot
+// ✅ Start Bot
 (async () => {
     try {
         logMessage('INFO', '🚀 Starting Silva AI WhatsApp Bot...');
