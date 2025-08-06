@@ -23,7 +23,7 @@ const logDir = path.join(__dirname, 'logs');
 // ✅ OpenAI Configuration with Rate Limiter
 const AI_PROVIDER = {
     endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4o', 'gpt-4-turbo'], // fallback models
+    models: ['gpt-4o', 'gpt-4o-mini'], // fallback models
     headers: { 'Authorization': `Bearer ${config.OPENAI_API_KEY}` }
 };
 
