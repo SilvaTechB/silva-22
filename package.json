@@ -27,6 +27,7 @@
     "aptoide-scraper": "^1.0.1",
     "awesome-phonenumber": "^3.4.0",
     "axios": "^1.4.0",
+    "bottleneck": "^2.19.5",
     "btch-downloader": "^4.1.21",
     "chalk": "^5.4.1",
     "cheerio": "^1.0.0-rc.12",
