@@ -1,4 +1,5 @@
-// ✅ Silva AI WhatsApp Bot - Complete Script (Fixed "thinking" + Insufficient Balance Error)
+ 
+// ✅ Silva AI WhatsApp Bot - Complete Script
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
@@ -82,51 +83,179 @@ const memoryManager = new MemoryManager();
 
 // Global Context Info
 const globalContextInfo = {
-  forwardingScore: 999,
-  isForwarded: true,
-  externalAdReply: {
-    title: `✦ ${config.BOT_NAME} ✦`,
-    body: "Powered by DeepSeek & OpenAI",
-    thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
-    sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
-    mediaType: 1,
-    renderLargerThumbnail: true
-  }
+    forwardingScore: 999,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+        newsletterJid: '120363200367779016@newsletter',
+        newsletterName: '◢◤ Silva Tech Inc ◢◤',
+        serverMessageId: 144
+    },
+    externalAdReply: {
+        title: `✦ ${config.BOT_NAME} ✦`,
+        body: "Powered by DeepSeek & OpenAI",
+        thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
+        sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
+        mediaType: 1,
+        renderLargerThumbnail: true
+    }
 };
 
-// Clean temp files periodically
-setInterval(() => {
-  fs.readdirSync(tempDir).forEach(file => fs.unlinkSync(path.join(tempDir, file)));
-}, 5 * 60 * 1000);
-
+// Setup Directories
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// Logging
+// Clean temp files periodically
+setInterval(() => {
+    fs.readdirSync(tempDir).forEach(file => fs.unlinkSync(path.join(tempDir, file)));
+}, 5 * 60 * 1000);
+
+// Logger Functions
 function getLogFileName() {
-  const date = new Date();
-  return `messages-${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}.log`;
+    const date = new Date();
+    return `messages-${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}.log`;
 }
 
 function logMessage(type, message) {
-  if (!config.DEBUG && type === 'DEBUG') return;
-  const timestamp = new Date().toISOString();
-  const logEntry = `[${timestamp}] [${type}] ${message}\n`;
-  console.log(logEntry.trim());
-  fs.appendFileSync(path.join(logDir, getLogFileName()), logEntry);
+    if (!config.DEBUG && type === 'DEBUG') return;
+    
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] [${type}] ${message}\n`;
+    
+    console.log(logEntry.trim());
+    fs.appendFileSync(path.join(logDir, getLogFileName()), logEntry);
 }
 
-// AI Chat Function
+// Load Plugins
+let plugins = new Map();
+function loadPlugins() {
+    if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
+    const files = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
+    plugins.clear();
+    for (const file of files) {
+        delete require.cache[require.resolve(path.join(pluginsDir, file))];
+        const plugin = require(path.join(pluginsDir, file));
+        plugins.set(file.replace('.js', ''), plugin);
+    }
+    logMessage('INFO', `✅ Loaded ${plugins.size} plugins`);
+}
+loadPlugins();
+
+// Session Setup
+async function setupSession() {
+    const sessionPath = path.join(__dirname, 'sessions', 'creds.json');
+    if (!fs.existsSync(sessionPath)) {
+        if (!config.SESSION_ID || !config.SESSION_ID.startsWith('Silva~')) {
+            throw new Error('Invalid or missing SESSION_ID. Must start with Silva~');
+        }
+        logMessage('INFO', '⬇ Downloading session from Mega.nz...');
+        const megaCode = config.SESSION_ID.replace('Silva~', '');
+        
+        const mega = require('megajs');
+        const file = mega.File.fromURL(`https://mega.nz/file/${megaCode}`);
+        
+        await new Promise((resolve, reject) => {
+            file.download((err, data) => {
+                if (err) {
+                    logMessage('ERROR', `❌ Mega download failed: ${err.message}`);
+                    return reject(err);
+                }
+                fs.mkdirSync(path.join(__dirname, 'sessions'), { recursive: true });
+                fs.writeFileSync(sessionPath, data);
+                logMessage('SUCCESS', '✅ Session downloaded and saved.');
+                resolve();
+            });
+        });
+    }
+}
+
+// Helper Functions
+function generateConfigTable() {
+    const configs = [
+        { name: 'MODE', value: config.MODE },
+        { name: 'ANTIDELETE_GROUP', value: config.ANTIDELETE_GROUP },
+        { name: 'ANTIDELETE_PRIVATE', value: config.ANTIDELETE_PRIVATE },
+        { name: 'AUTO_STATUS_SEEN', value: config.AUTO_STATUS_SEEN },
+        { name: 'AUTO_STATUS_REACT', value: config.AUTO_STATUS_REACT },
+        { name: 'AUTO_STATUS_REPLY', value: config.AUTO_STATUS_REPLY },
+        { name: 'AUTO_REACT_NEWSLETTER', value: config.AUTO_REACT_NEWSLETTER },
+        { name: 'ANTI_LINK', value: config.ANTI_LINK },
+        { name: 'ALWAYS_ONLINE', value: config.ALWAYS_ONLINE },
+        { name: 'GROUP_COMMANDS', value: config.GROUP_COMMANDS }
+    ];
+
+    let table = '╔══════════════════════════╦═══════════╗\n';
+    table += '║        Config Name       ║   Value   ║\n';
+    table += '╠══════════════════════════╬═══════════╣\n';
+
+    for (const config of configs) {
+        const paddedName = config.name.padEnd(24, ' ');
+        const paddedValue = String(config.value).padEnd(9, ' ');
+        table += `║ ${paddedName} ║ ${paddedValue} ║\n`;
+    }
+
+    table += '╚══════════════════════════╩═══════════╝';
+    return table;
+}
+
+function generateFancyBio() {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-KE', { 
+        weekday: 'long', 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+    });
+    
+    const timeStr = now.toLocaleTimeString('en-KE', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
+    
+    const bios = [
+        `✨ ${config.BOT_NAME} ✦ Online ✦ ${dateStr} ✦`,
+        `⚡ Silva MD Active ✦ ${timeStr} ✦ ${dateStr} ✦`,
+        `💫 ${config.BOT_NAME} Operational ✦ ${dateStr} ✦`,
+        `🚀 Silva MD Live ✦ ${dateStr} ✦ ${timeStr} ✦`,
+        `🌟 ${config.BOT_NAME} Running ✦ ${dateStr} ✦`
+    ];
+    
+    return bios[Math.floor(Math.random() * bios.length)];
+}
+
+function isBotMentioned(message, botJid) {
+    if (!message || !botJid) return false;
+    
+    if (message.extendedTextMessage) {
+        const mentionedJids = message.extendedTextMessage.contextInfo?.mentionedJid || [];
+        return mentionedJids.includes(botJid);
+    }
+    
+    if (message.conversation) {
+        const botNumber = botJid.split('@')[0];
+        return message.conversation.includes(`@${botNumber}`);
+    }
+    
+    return false;
+}
+
+// AI Functions
 async function getAIResponse(jid, userMessage) {
   try {
     const history = memoryManager.getConversation(jid);
+    
     const messages = [
-      { role: 'system', content: `You are Silva AI, a helpful WhatsApp assistant. Date: ${new Date().toLocaleDateString()}` },
+      {
+        role: 'system',
+        content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}. ` +
+                 `User's name: ${jid.split('@')[0]}. Respond conversationally.`
+      },
       ...history.map(msg => ({ role: msg.role, content: msg.content })),
       { role: 'user', content: userMessage }
     ];
 
-    const provider = config.PREFERRED_AI === 'OPENAI' ? AI_PROVIDERS.OPENAI : AI_PROVIDERS.DEEPSEEK;
+    const provider = config.PREFERRED_AI === 'OPENAI' ? 
+      AI_PROVIDERS.OPENAI : AI_PROVIDERS.DEEPSEEK;
 
     const response = await axios.post(provider.endpoint, {
       model: provider.model,
@@ -136,80 +265,210 @@ async function getAIResponse(jid, userMessage) {
     }, { headers: provider.headers });
 
     const aiResponse = response.data.choices[0].message.content;
+    
     memoryManager.addMessage(jid, 'user', userMessage);
     memoryManager.addMessage(jid, 'assistant', aiResponse);
+    
     return aiResponse;
   } catch (error) {
-    const errMsg = error?.response?.data?.error?.message || error.message || 'Unknown error';
-    logMessage('ERROR', `AI API Error: ${errMsg}`);
-    if (errMsg.toLowerCase().includes('insufficient balance')) {
-      return "⚠️ AI service temporarily disabled due to account limits. Please try again later.";
-    }
-    return "⚠️ AI service unavailable. Please try again later.";
+    console.error('AI Error:', error.response?.data || error.message);
+    return "⚠️ Sorry, I'm having trouble thinking right now. Please try again later.";
   }
 }
 
-// WhatsApp Setup
+// WhatsApp Connection
 async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions'));
-  const { version } = await fetchLatestBaileysVersion();
+    await setupSession();
+    const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions'));
+    const { version } = await fetchLatestBaileysVersion();
 
-  const sock = makeWASocket({
-    logger: P({ level: config.DEBUG ? 'debug' : 'silent' }),
-    browser: Browsers.macOS('Safari'),
-    auth: state,
-    version
-  });
+    const sock = makeWASocket({
+        logger: P({ level: config.DEBUG ? 'debug' : 'silent' }),
+        printQRInTerminal: false,
+        browser: Browsers.macOS('Safari'),
+        auth: state,
+        version,
+        markOnlineOnConnect: config.ALWAYS_ONLINE,
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+        getMessage: async () => undefined,
+        maxSharedKeys: 1000,
+        sessionThreshold: 0,
+        cache: {
+            TRANSACTION: false,
+            PRE_KEYS: false
+        }
+    });
 
-  sock.ev.on('connection.update', async update => {
-    if (update.connection === 'open') {
-      logMessage('SUCCESS', '✅ Connected to WhatsApp');
-    } else if (update.connection === 'close' && update.lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-      logMessage('WARN', 'Reconnecting...');
-      setTimeout(() => connectToWhatsApp(), 2000);
-    }
-  });
+    sock.ev.on('connection.update', async update => {
+        const { connection, lastDisconnect } = update;
+        if (connection === 'close') {
+            logMessage('WARN', `Connection closed: ${lastDisconnect?.error?.output?.statusCode || 'Unknown'}`);
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+                logMessage('INFO', 'Reconnecting...');
+                setTimeout(() => connectToWhatsApp(), 2000);
+            }
+        } else if (connection === 'open') {
+            logMessage('SUCCESS', '✅ Connected to WhatsApp');
+            global.botJid = sock.user.id;
+            await updateProfileStatus(sock);
+            await sendWelcomeMessage(sock);
+        }
+    });
 
-  sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    const m = messages[0];
-    if (!m.message) return;
+    // Message Handling
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+        
+        const m = messages[0];
+        if (!m.message) return;
 
-    const sender = m.key.remoteJid;
-    if (isJidGroup(sender) && !config.GROUP_COMMANDS) return;
+        const sender = m.key.remoteJid;
+        const isGroup = isJidGroup(sender);
+        const isNewsletter = sender.endsWith('@newsletter');
+        
+        // Log incoming message
+        logMessage('MESSAGE', `New ${isNewsletter ? 'newsletter' : isGroup ? 'group' : 'private'} message from ${sender}`);
+        
+        // Auto-react to newsletter messages
+        if (isNewsletter && config.AUTO_REACT_NEWSLETTER) {
+            try {
+                await sock.sendMessage(sender, {
+                    react: {
+                        text: '🤖',
+                        key: m.key
+                    }
+                });
+            } catch (e) {
+                logMessage('ERROR', `Newsletter react failed: ${e.message}`);
+            }
+        }
+        
+        // Skip processing if group commands are disabled
+        if (isGroup && !config.GROUP_COMMANDS) return;
+        
+        // Extract content
+        const messageType = Object.keys(m.message)[0];
+        let content = '';
+        let isMentioned = false;
+        
+        if (messageType === 'conversation') {
+            content = m.message.conversation;
+        } else if (messageType === 'extendedTextMessage') {
+            content = m.message.extendedTextMessage.text || '';
+            if (isGroup && global.botJid) {
+                isMentioned = isBotMentioned(m.message, global.botJid);
+            }
+        } else if (messageType === 'imageMessage') {
+            content = m.message.imageMessage.caption || '';
+        } else if (messageType === 'videoMessage') {
+            content = m.message.videoMessage.caption || '';
+        } else if (messageType === 'documentMessage') {
+            content = m.message.documentMessage.caption || '';
+        } else {
+            return;
+        }
+        
+        // Always respond in private chats, in groups only when mentioned
+        const shouldRespond = !isGroup || (isGroup && isMentioned);
+        if (!shouldRespond) return;
+        
+        // If mentioned, remove mention from content
+        if (isMentioned) {
+            const botNumber = global.botJid.split('@')[0];
+            content = content.replace(new RegExp(`@${botNumber}\\s*`, 'i'), '').trim();
+        }
+        
+        // Handle AI Response
+        if (config.READ_MESSAGE) await sock.readMessages([m.key]);
+        
+        try {
+            await sock.sendPresenceUpdate('composing', sender);
+            const aiResponse = await getAIResponse(sender, content);
+            
+            await sock.sendMessage(sender, {
+                text: aiResponse,
+                contextInfo: globalContextInfo
+            }, { quoted: m });
+            
+            logMessage('AI', `Response sent: ${aiResponse.substring(0, 100)}`);
+        } catch (err) {
+            logMessage('ERROR', `AI Processing Error: ${err.message}`);
+            await sock.sendMessage(sender, {
+                text: "⚠️ Sorry, I encountered an error processing your request.",
+                contextInfo: globalContextInfo
+            }, { quoted: m });
+        } finally {
+            await sock.sendPresenceUpdate('paused', sender);
+        }
+    });
 
-    const msgType = Object.keys(m.message)[0];
-    const content = m.message[msgType]?.text || m.message[msgType]?.caption || m.message.conversation || '';
-    if (!content) return;
+    return sock;
+}
 
+// Profile Functions
+async function updateProfileStatus(sock) {
     try {
-      await sock.sendPresenceUpdate('composing', sender);
-      const response = await getAIResponse(sender, content);
-      await sock.sendMessage(sender, {
-        text: response,
-        contextInfo: globalContextInfo
-      }, { quoted: m });
-      logMessage('AI', `Response sent to ${sender}`);
-    } catch (e) {
-      logMessage('ERROR', `Failed to send AI response: ${e.message}`);
-      await sock.sendMessage(sender, { text: "⚠️ AI error. Please try again later." });
+        const bio = generateFancyBio();
+        await sock.updateProfileStatus(bio);
+        logMessage('SUCCESS', `✅ Bio updated: ${bio}`);
+    } catch (err) {
+        logMessage('ERROR', `❌ Failed to update bio: ${err.message}`);
     }
-  });
+}
+
+async function sendWelcomeMessage(sock) {
+    const configTable = generateConfigTable();
+    
+    const welcomeMsg = `*Hello ✦ ${config.BOT_NAME} ✦ User!*\n\n` +
+        `✅ Silva AI Bot is now active!\n\n` +
+        `*Mode:* ${config.MODE}\n` +
+        `*Plugins Loaded:* ${plugins.size}\n\n` +
+        `*⚙️ Configuration Status:*\n\`\`\`${configTable}\`\`\`\n\n` +
+        `*Description:* ${config.DESCRIPTION}\n\n` +
+        `⚡ Powered by Silva Tech Inc\nGitHub: https://github.com/SilvaTechB/silva-md-bot`;
+
+    await sock.sendMessage(sock.user.id, {
+        image: { url: config.ALIVE_IMG },
+        caption: welcomeMsg,
+        contextInfo: {
+            ...globalContextInfo,
+            externalAdReply: {
+                title: `✦ ${config.BOT_NAME} ✦ Official`,
+                body: "Your AI assistant is ready!",
+                thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
+                sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
+                mediaType: 1,
+                renderLargerThumbnail: true
+            }
+        }
+    });
 }
 
 // Express Server
 const app = express();
-app.get('/', (req, res) => res.send(`✅ ${config.BOT_NAME} is running.`));
-app.listen(port, () => logMessage('INFO', `🌐 Web server started on port ${port}`));
+app.get('/', (req, res) => res.send(`✅ ${config.BOT_NAME} is Running!`));
+app.listen(port, () => logMessage('INFO', `🌐 Server running on port ${port}`));
+
+// Error Handling
+process.on('uncaughtException', (err) => {
+    logMessage('CRITICAL', `Uncaught Exception: ${err.stack}`);
+    setTimeout(() => connectToWhatsApp(), 5000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logMessage('CRITICAL', `Unhandled Rejection: ${reason} at ${promise}`);
+});
 
 // Start Bot
 (async () => {
-  try {
-    logMessage('INFO', '🚀 Starting Silva AI Bot...');
-    await connectToWhatsApp();
-  } catch (e) {
-    logMessage('CRITICAL', `Startup error: ${e.stack}`);
-  }
+    try {
+        logMessage('INFO', '🚀 Starting Silva AI WhatsApp Bot...');
+        await connectToWhatsApp();
+    } catch (e) {
+        logMessage('CRITICAL', `Bot Init Failed: ${e.stack}`);
+        setTimeout(() => connectToWhatsApp(), 5000);
+    }
 })();
