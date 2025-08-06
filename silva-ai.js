@@ -1,4 +1,4 @@
-// ✅ Silva AI WhatsApp Bot - OpenAI Only Version (with Rate Limit Fixes)
+// ✅ Silva AI WhatsApp Bot - With Delayed Responses
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
@@ -19,8 +19,9 @@ const tempDir = path.join(os.tmpdir(), 'silva-cache');
 const port = process.env.PORT || 25680;
 const pluginsDir = path.join(__dirname, 'plugins');
 const logDir = path.join(__dirname, 'logs');
+const RESPONSE_DELAY = 15000; // 15 seconds delay
 
-// ✅ OpenAI Configuration with Rate Limiter
+// ✅ OpenAI Configuration
 const AI_PROVIDER = {
     endpoint: 'https://api.openai.com/v1/chat/completions',
     models: ['gpt-4o', 'gpt-4o-mini'], // fallback models
@@ -29,12 +30,11 @@ const AI_PROVIDER = {
 
 // Rate Limiter Configuration
 const openaiLimiter = new Bottleneck({
-  minTime: 1000, // minimum time between requests (1 second)
+  minTime: 2000, // minimum time between requests (2 seconds)
   maxConcurrent: 1, // only 1 request at a time
-  reservoir: 60, // initial number of requests allowed
-  reservoirRefreshAmount: 60, // number of requests added per refresh
+  reservoir: 3, // initial number of requests allowed
+  reservoirRefreshAmount: 3, // number of requests added per refresh
   reservoirRefreshInterval: 60 * 1000, // refresh interval (1 minute)
-  timeout: 30000, // request timeout
 });
 
 // Memory System
@@ -84,7 +84,7 @@ const globalContextInfo = {
     isForwarded: true,
     forwardedNewsletterMessageInfo: {
         newsletterJid: '120363200367779016@newsletter',
-        newsletterName: '◢◤ Silva Tech Inc ◢◤',
+        newsletterName: '◢◤ Silva AI ◢◤',
         serverMessageId: 144
     },
     externalAdReply: {
@@ -100,11 +100,6 @@ const globalContextInfo = {
 // Setup Directories
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-
-// Clean temp files periodically
-setInterval(() => {
-    fs.readdirSync(tempDir).forEach(file => fs.unlinkSync(path.join(tempDir, file)));
-}, 5 * 60 * 1000);
 
 // Logger Functions
 function getLogFileName() {
@@ -162,9 +157,12 @@ async function setupSession() {
     }
 }
 
-// ✅ Enhanced AI Response Function with Rate Limiting
+// ✅ Enhanced AI Response Function with Delay
 async function getAIResponse(jid, userMessage) {
     try {
+        // Add artificial delay before processing
+        await new Promise(resolve => setTimeout(resolve, RESPONSE_DELAY));
+
         const history = memoryManager.getConversation(jid);
         const messages = [
             {
@@ -180,7 +178,7 @@ async function getAIResponse(jid, userMessage) {
         
         for (const model of AI_PROVIDER.models) {
             try {
-                const response = await openaiLimiter.schedule({ expiration: 30000 }, () => 
+                const response = await openaiLimiter.schedule(() => 
                     axios.post(AI_PROVIDER.endpoint, {
                         model,
                         messages,
@@ -200,7 +198,7 @@ async function getAIResponse(jid, userMessage) {
                 
                 // If rate limited, wait before trying next model
                 if (error.response?.status === 429) {
-                    const retryAfter = error.response.headers['retry-after'] || 5;
+                    const retryAfter = error.response.headers['retry-after'] || 20;
                     logMessage('INFO', `⏳ Rate limited - waiting ${retryAfter} seconds`);
                     await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
                 }
@@ -217,7 +215,7 @@ async function getAIResponse(jid, userMessage) {
         return aiResponse;
     } catch (error) {
         logMessage('ERROR', `AI Failed: ${error.message}`);
-        return "⚠️ Sorry, I'm experiencing high demand right now. Please try again in a moment.";
+        return "⚠️ I'm currently processing many requests. Please wait a moment and try again.";
     }
 }
 
@@ -270,12 +268,6 @@ async function connectToWhatsApp() {
             // Skip if group commands disabled
             if (isGroup && !config.GROUP_COMMANDS) return;
 
-            // Only respond if mentioned in groups (if enabled)
-            if (isGroup && config.GROUP_MENTION) {
-                const botMentioned = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(sock.user.id);
-                if (!botMentioned) return;
-            }
-
             const messageType = Object.keys(m.message)[0];
             let content = '';
             if (messageType === 'conversation') content = m.message.conversation;
@@ -285,14 +277,28 @@ async function connectToWhatsApp() {
 
             if (!content) return;
 
-            if (config.READ_MESSAGE) await sock.readMessages([m.key]);
-
             try {
+                // Process message and get response
                 const aiResponse = await getAIResponse(sender, content);
-                await sock.sendMessage(sender, { text: aiResponse, contextInfo: globalContextInfo }, { quoted: m });
+                
+                // Send response
+                await sock.sendMessage(
+                    sender, 
+                    { text: aiResponse, contextInfo: globalContextInfo }, 
+                    { quoted: m }
+                );
+                
+                // Mark as read only after responding
+                if (config.READ_MESSAGE) {
+                    await sock.readMessages([m.key]);
+                }
             } catch (err) {
                 logMessage('ERROR', `AI Processing Error: ${err.message}`);
-                await sock.sendMessage(sender, { text: "⚠️ I'm currently overloaded with requests. Please try again shortly.", contextInfo: globalContextInfo }, { quoted: m });
+                await sock.sendMessage(
+                    sender, 
+                    { text: "⚠️ I'm currently processing your request. Please wait...", contextInfo: globalContextInfo }, 
+                    { quoted: m }
+                );
             }
         });
 
