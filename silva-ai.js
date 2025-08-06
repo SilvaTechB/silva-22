@@ -1,26 +1,4 @@
-2025-08-06T16:01:45.555670+00:00 app[web.1]: [2025-08-06T16:01:45.555Z] [SUCCESS] ✅ Connected to WhatsApp
-2025-08-06T16:01:45.668149+00:00 app[web.1]: [2025-08-06T16:01:45.668Z] [SUCCESS] ✅ Bio updated: ✨ ✦ Silva AI ✦ Online ✦ 8/6/2025, 4:01:45 PM
-2025-08-06T16:03:56.667740+00:00 app[web.1]: [2025-08-06T16:03:56.667Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:04:20.305053+00:00 app[web.1]: [2025-08-06T16:04:20.304Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:12:32.030760+00:00 app[web.1]: [2025-08-06T16:12:32.030Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:13:28.425568+00:00 app[web.1]: [2025-08-06T16:13:28.425Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:13:46.508821+00:00 app[web.1]: [2025-08-06T16:13:46.508Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:14:08.275657+00:00 app[web.1]: [2025-08-06T16:14:08.275Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:16:36.119771+00:00 app[web.1]: [2025-08-06T16:16:36.119Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:18:01.833685+00:00 app[web.1]: [2025-08-06T16:18:01.833Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:18:27.559357+00:00 app[web.1]: [2025-08-06T16:18:27.559Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:20:06.047873+00:00 app[web.1]: [2025-08-06T16:20:06.047Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:20:36.696510+00:00 app[web.1]: [2025-08-06T16:20:36.696Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:20:45.815098+00:00 app[web.1]: [2025-08-06T16:20:45.815Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:23:59.924641+00:00 app[web.1]: [2025-08-06T16:23:59.924Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:26:53.052793+00:00 app[web.1]: [2025-08-06T16:26:53.052Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:27:41.455412+00:00 app[web.1]: [2025-08-06T16:27:41.455Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:28:31.512412+00:00 app[web.1]: [2025-08-06T16:28:31.512Z] [WARN] OpenAI model error: Request failed with status code 429
-2025-08-06T16:28:59.245981+00:00 app[web.1]: [2025-08-06T16:28:59.245Z] [WARN] OpenAI model error: Request failed with status code 429
-Disconnected from log stream. There may be events happening that you do not see here! Attempting to reconnect...
-Connection to log stream failed. Please try again later.
 
-in this 
 // ✅ Silva AI WhatsApp Bot - OpenAI Only Version
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
