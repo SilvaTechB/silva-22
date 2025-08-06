@@ -1,4 +1,4 @@
-// ✅ Silva AI WhatsApp Bot - Complete Script
+// ✅ Fixed Silva AI WhatsApp Bot - Complete Script
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
@@ -238,11 +238,31 @@ function isBotMentioned(message, botJid) {
     return false;
 }
 
-// AI Functions
+// AI Functions - FIXED WITH PROVIDER FALLBACK
 async function getAIResponse(jid, userMessage) {
+  // Helper to check provider configuration
+  const isProviderConfigured = (provider) => {
+    return provider && provider.headers && provider.headers.Authorization && 
+           provider.headers.Authorization.startsWith('Bearer ');
+  };
+
+  // Helper to detect balance errors
+  const isBalanceError = (error) => {
+    if (!error.response) return false;
+    
+    const status = error.response.status;
+    if ([402, 403, 429].includes(status)) return true;
+    
+    if (error.response.data?.error?.message) {
+      const msg = error.response.data.error.message.toLowerCase();
+      return ['insufficient', 'balance', 'quota', 'limit', 'credit'].some(word => msg.includes(word));
+    }
+    
+    return false;
+  };
+
   try {
     const history = memoryManager.getConversation(jid);
-    
     const messages = [
       {
         role: 'system',
@@ -253,25 +273,53 @@ async function getAIResponse(jid, userMessage) {
       { role: 'user', content: userMessage }
     ];
 
-    const provider = config.PREFERRED_AI === 'OPENAI' ? 
-      AI_PROVIDERS.OPENAI : AI_PROVIDERS.DEEPSEEK;
+    let aiResponse;
+    let lastError;
+    
+    // Determine active providers
+    const activeProviders = [];
+    if (isProviderConfigured(AI_PROVIDERS.DEEPSEEK)) activeProviders.push('DEEPSEEK');
+    if (isProviderConfigured(AI_PROVIDERS.OPENAI)) activeProviders.push('OPENAI');
+    
+    if (activeProviders.length === 0) {
+      throw new Error('No AI providers configured');
+    }
+    
+    // Try providers in order
+    for (const providerName of activeProviders) {
+      const provider = AI_PROVIDERS[providerName];
+      try {
+        const response = await axios.post(provider.endpoint, {
+          model: provider.model,
+          messages,
+          max_tokens: 1500,
+          temperature: 0.7
+        }, { 
+          headers: provider.headers,
+          timeout: 30000
+        });
 
-    const response = await axios.post(provider.endpoint, {
-      model: provider.model,
-      messages,
-      max_tokens: 1500,
-      temperature: 0.7
-    }, { headers: provider.headers });
+        aiResponse = response.data.choices[0].message.content;
+        break; // Exit loop on success
+      } catch (error) {
+        lastError = error;
+        if (isBalanceError(error)) {
+          logMessage('WARN', `⚠️ ${providerName} balance error - trying fallback`);
+        }
+      }
+    }
 
-    const aiResponse = response.data.choices[0].message.content;
+    if (!aiResponse) {
+      throw lastError || new Error('All AI providers failed');
+    }
     
     memoryManager.addMessage(jid, 'user', userMessage);
     memoryManager.addMessage(jid, 'assistant', aiResponse);
     
     return aiResponse;
   } catch (error) {
-    console.error('AI Error:', error.response?.data || error.message);
-    return "⚠️ Sorry, I'm having trouble thinking right now. Please try again later.";
+    logMessage('ERROR', `AI Error: ${error.response?.data?.error?.message || error.message}`);
+    return "⚠️ Sorry, I'm having trouble processing your request. Please try again later.";
   }
 }
 
@@ -384,7 +432,7 @@ async function connectToWhatsApp() {
         if (config.READ_MESSAGE) await sock.readMessages([m.key]);
         
         try {
-            await sock.sendPresenceUpdate('composing', sender);
+            // REMOVED PRESENCE UPDATES (TYPING INDICATOR)
             const aiResponse = await getAIResponse(sender, content);
             
             await sock.sendMessage(sender, {
@@ -399,8 +447,6 @@ async function connectToWhatsApp() {
                 text: "⚠️ Sorry, I encountered an error processing your request.",
                 contextInfo: globalContextInfo
             }, { quoted: m });
-        } finally {
-            await sock.sendPresenceUpdate('paused', sender);
         }
     });
 
