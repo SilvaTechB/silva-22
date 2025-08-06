@@ -1,5 +1,4 @@
-
-// ✅ Silva AI WhatsApp Bot - OpenAI Only Version
+// ✅ Silva AI WhatsApp Bot - OpenAI Only Version (with Rate Limit Fixes)
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
@@ -11,6 +10,7 @@ const os = require('os');
 const express = require('express');
 const P = require('pino');
 const axios = require('axios');
+const Bottleneck = require('bottleneck');
 const config = require('./config.js');
 
 // Constants
@@ -20,12 +20,22 @@ const port = process.env.PORT || 25680;
 const pluginsDir = path.join(__dirname, 'plugins');
 const logDir = path.join(__dirname, 'logs');
 
-// ✅ OpenAI Configuration
+// ✅ OpenAI Configuration with Rate Limiter
 const AI_PROVIDER = {
     endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4o', 'gpt-4o-mini'], // fallback models
+    models: ['gpt-4o', 'gpt-4-turbo'], // fallback models
     headers: { 'Authorization': `Bearer ${config.OPENAI_API_KEY}` }
 };
+
+// Rate Limiter Configuration
+const openaiLimiter = new Bottleneck({
+  minTime: 1000, // minimum time between requests (1 second)
+  maxConcurrent: 1, // only 1 request at a time
+  reservoir: 60, // initial number of requests allowed
+  reservoirRefreshAmount: 60, // number of requests added per refresh
+  reservoirRefreshInterval: 60 * 1000, // refresh interval (1 minute)
+  timeout: 30000, // request timeout
+});
 
 // Memory System
 class MemoryManager {
@@ -152,7 +162,7 @@ async function setupSession() {
     }
 }
 
-// ✅ AI Response Function (OpenAI Only)
+// ✅ Enhanced AI Response Function with Rate Limiting
 async function getAIResponse(jid, userMessage) {
     try {
         const history = memoryManager.getConversation(jid);
@@ -166,23 +176,40 @@ async function getAIResponse(jid, userMessage) {
         ];
 
         let aiResponse;
+        let lastError;
+        
         for (const model of AI_PROVIDER.models) {
             try {
-                const response = await axios.post(AI_PROVIDER.endpoint, {
-                    model,
-                    messages,
-                    max_tokens: 1500,
-                    temperature: 0.7
-                }, { headers: AI_PROVIDER.headers, timeout: 30000 });
+                const response = await openaiLimiter.schedule({ expiration: 30000 }, () => 
+                    axios.post(AI_PROVIDER.endpoint, {
+                        model,
+                        messages,
+                        max_tokens: 1500,
+                        temperature: 0.7
+                    }, { 
+                        headers: AI_PROVIDER.headers,
+                        timeout: 30000
+                    })
+                );
 
                 aiResponse = response.data.choices[0].message.content;
                 break; // success
             } catch (error) {
-                logMessage('WARN', `OpenAI model error: ${error.message}`);
+                lastError = error;
+                logMessage('WARN', `OpenAI model error (${model}): ${error.message}`);
+                
+                // If rate limited, wait before trying next model
+                if (error.response?.status === 429) {
+                    const retryAfter = error.response.headers['retry-after'] || 5;
+                    logMessage('INFO', `⏳ Rate limited - waiting ${retryAfter} seconds`);
+                    await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+                }
             }
         }
 
-        if (!aiResponse) throw new Error('All OpenAI models failed.');
+        if (!aiResponse) {
+            throw lastError || new Error('All OpenAI models failed.');
+        }
 
         memoryManager.addMessage(jid, 'user', userMessage);
         memoryManager.addMessage(jid, 'assistant', aiResponse);
@@ -190,7 +217,7 @@ async function getAIResponse(jid, userMessage) {
         return aiResponse;
     } catch (error) {
         logMessage('ERROR', `AI Failed: ${error.message}`);
-        return "⚠️ Sorry, I'm unable to process your request right now.";
+        return "⚠️ Sorry, I'm experiencing high demand right now. Please try again in a moment.";
     }
 }
 
@@ -240,7 +267,14 @@ async function connectToWhatsApp() {
             const sender = m.key.remoteJid;
             const isGroup = isJidGroup(sender);
 
+            // Skip if group commands disabled
             if (isGroup && !config.GROUP_COMMANDS) return;
+
+            // Only respond if mentioned in groups (if enabled)
+            if (isGroup && config.GROUP_MENTION) {
+                const botMentioned = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(sock.user.id);
+                if (!botMentioned) return;
+            }
 
             const messageType = Object.keys(m.message)[0];
             let content = '';
@@ -258,7 +292,7 @@ async function connectToWhatsApp() {
                 await sock.sendMessage(sender, { text: aiResponse, contextInfo: globalContextInfo }, { quoted: m });
             } catch (err) {
                 logMessage('ERROR', `AI Processing Error: ${err.message}`);
-                await sock.sendMessage(sender, { text: "⚠️ AI error occurred.", contextInfo: globalContextInfo }, { quoted: m });
+                await sock.sendMessage(sender, { text: "⚠️ I'm currently overloaded with requests. Please try again shortly.", contextInfo: globalContextInfo }, { quoted: m });
             }
         });
 
@@ -300,4 +334,4 @@ app.listen(port, () => logMessage('INFO', `🌐 Server running on port ${port}`)
         logMessage('CRITICAL', `Bot Init Failed: ${e.stack}`);
         setTimeout(() => connectToWhatsApp(), 5000);
     }
-})(); 
+})();
