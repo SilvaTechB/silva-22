@@ -31,7 +31,7 @@ class MemoryManager {
     constructor() {
         this.memoryPath = path.join(__dirname, 'conversation_memory.json');
         this.conversations = this.loadMemory();
-        this.maxHistory = config.MAX_HISTORY || 10;
+        this.maxHistory = config.MAX_HISTORY || 1000;
     }
     loadMemory() {
         try {
