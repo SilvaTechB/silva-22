@@ -1,0 +1,42 @@
+{
+  "name": "Silva AI WhatsApp Bot",
+  "description": "Advanced AI-powered WhatsApp assistant with DeepSeek and OpenAI integration",
+  "repository": "https://github.com/SilvaTechB/silva-ai-whatsapp-bot",
+  "logo": "https://files.catbox.moe/5uli5p.jpeg",
+  "keywords": ["whatsapp", "bot", "ai", "deepseek", "openai", "silva-tech"],
+  "stack": "heroku-24",
+  "env": {
+    "SESSION_ID": {
+      "description": "Your Mega.nz session ID starting with 'Silva~'",
+      "required": true
+    },
+    "DEEPSEEK_API_KEY": {
+      "description": "Your DeepSeek API key",
+      "required": false
+    },
+    "OPENAI_API_KEY": {
+      "description": "Your OpenAI API key",
+      "required": false
+    },
+    "PREFERRED_AI": {
+      "description": "Preferred AI provider (DEEPSEEK or OPENAI)",
+      "value": "DEEPSEEK",
+      "required": true
+    },
+    "OWNER_NUMBER": {
+      "description": "Your WhatsApp number with country code",
+      "value": "254700143167",
+      "required": true
+    },
+    "BOT_NAME": {
+      "description": "Your bot's display name",
+      "value": "✦ Silva AI ✦",
+      "required": true
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "https://github.com/heroku/heroku-buildpack-nodejs.git"
+    }
+  ]
+}
