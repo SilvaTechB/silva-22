@@ -33,32 +33,210 @@ const AI_PROVIDERS = {
   }
 };
 
-// Memory System (unchanged)
+// Memory System
 class MemoryManager {
-  // ... (keep existing memory manager code)
+  constructor() {
+    this.memoryPath = path.join(__dirname, 'conversation_memory.json');
+    this.conversations = this.loadMemory();
+    this.maxHistory = config.MAX_HISTORY || 10;
+  }
+
+  loadMemory() {
+    try {
+      return fs.existsSync(this.memoryPath) ? 
+        JSON.parse(fs.readFileSync(this.memoryPath)) : {};
+    } catch (e) {
+      console.error('Memory load error:', e);
+      return {};
+    }
+  }
+
+  saveMemory() {
+    try {
+      fs.writeFileSync(this.memoryPath, JSON.stringify(this.conversations, null, 2));
+    } catch (e) {
+      console.error('Memory save error:', e);
+    }
+  }
+
+  getConversation(jid) {
+    return this.conversations[jid] || [];
+  }
+
+  addMessage(jid, role, content) {
+    if (!this.conversations[jid]) this.conversations[jid] = [];
+    this.conversations[jid].push({ role, content, timestamp: Date.now() });
+    if (this.conversations[jid].length > this.maxHistory) {
+      this.conversations[jid].shift();
+    }
+    this.saveMemory();
+  }
+
+  clearConversation(jid) {
+    delete this.conversations[jid];
+    this.saveMemory();
+  }
 }
 
 const memoryManager = new MemoryManager();
 
-// Global Context Info (unchanged)
+// Global Context Info
 const globalContextInfo = {
-    // ... (keep existing context info)
+    forwardingScore: 999,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+        newsletterJid: '120363200367779016@newsletter',
+        newsletterName: '◢◤ Silva Tech Inc ◢◤',
+        serverMessageId: 144
+    },
+    externalAdReply: {
+        title: `✦ ${config.BOT_NAME} ✦`,
+        body: "Powered by DeepSeek & OpenAI",
+        thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
+        sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
+        mediaType: 1,
+        renderLargerThumbnail: true
+    }
 };
 
-// Setup Directories (unchanged)
-// ... (keep directory setup code)
+// Setup Directories
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// Logger Functions (unchanged)
-// ... (keep logging functions)
+// Clean temp files periodically
+setInterval(() => {
+    fs.readdirSync(tempDir).forEach(file => fs.unlinkSync(path.join(tempDir, file)));
+}, 5 * 60 * 1000);
 
-// Load Plugins (unchanged)
-// ... (keep plugin loading code)
+// Logger Functions
+function getLogFileName() {
+    const date = new Date();
+    return `messages-${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}.log`;
+}
 
-// Session Setup (unchanged)
-// ... (keep session setup code)
+function logMessage(type, message) {
+    if (!config.DEBUG && type === 'DEBUG') return;
+    
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] [${type}] ${message}\n`;
+    
+    console.log(logEntry.trim());
+    fs.appendFileSync(path.join(logDir, getLogFileName()), logEntry);
+}
 
-// Helper Functions (unchanged)
-// ... (keep helper functions)
+// Load Plugins
+let plugins = new Map();
+function loadPlugins() {
+    if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
+    const files = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
+    plugins.clear();
+    for (const file of files) {
+        delete require.cache[require.resolve(path.join(pluginsDir, file))];
+        const plugin = require(path.join(pluginsDir, file));
+        plugins.set(file.replace('.js', ''), plugin);
+    }
+    logMessage('INFO', `✅ Loaded ${plugins.size} plugins`);
+}
+loadPlugins();
+
+// Session Setup
+async function setupSession() {
+    const sessionPath = path.join(__dirname, 'sessions', 'creds.json');
+    if (!fs.existsSync(sessionPath)) {
+        if (!config.SESSION_ID || !config.SESSION_ID.startsWith('Silva~')) {
+            throw new Error('Invalid or missing SESSION_ID. Must start with Silva~');
+        }
+        logMessage('INFO', '⬇ Downloading session from Mega.nz...');
+        const megaCode = config.SESSION_ID.replace('Silva~', '');
+        
+        const mega = require('megajs');
+        const file = mega.File.fromURL(`https://mega.nz/file/${megaCode}`);
+        
+        await new Promise((resolve, reject) => {
+            file.download((err, data) => {
+                if (err) {
+                    logMessage('ERROR', `❌ Mega download failed: ${err.message}`);
+                    return reject(err);
+                }
+                fs.mkdirSync(path.join(__dirname, 'sessions'), { recursive: true });
+                fs.writeFileSync(sessionPath, data);
+                logMessage('SUCCESS', '✅ Session downloaded and saved.');
+                resolve();
+            });
+        });
+    }
+}
+
+// Helper Functions
+function generateConfigTable() {
+    const configs = [
+        { name: 'MODE', value: config.MODE },
+        { name: 'ANTIDELETE_GROUP', value: config.ANTIDELETE_GROUP },
+        { name: 'ANTIDELETE_PRIVATE', value: config.ANTIDELETE_PRIVATE },
+        { name: 'AUTO_STATUS_SEEN', value: config.AUTO_STATUS_SEEN },
+        { name: 'AUTO_STATUS_REACT', value: config.AUTO_STATUS_REACT },
+        { name: 'AUTO_STATUS_REPLY', value: config.AUTO_STATUS_REPLY },
+        { name: 'AUTO_REACT_NEWSLETTER', value: config.AUTO_REACT_NEWSLETTER },
+        { name: 'ANTI_LINK', value: config.ANTI_LINK },
+        { name: 'ALWAYS_ONLINE', value: config.ALWAYS_ONLINE },
+        { name: 'GROUP_COMMANDS', value: config.GROUP_COMMANDS }
+    ];
+
+    let table = '╔══════════════════════════╦═══════════╗\n';
+    table += '║        Config Name       ║   Value   ║\n';
+    table += '╠══════════════════════════╬═══════════╣\n';
+
+    for (const config of configs) {
+        const paddedName = config.name.padEnd(24, ' ');
+        const paddedValue = String(config.value).padEnd(9, ' ');
+        table += `║ ${paddedName} ║ ${paddedValue} ║\n`;
+    }
+
+    table += '╚══════════════════════════╩═══════════╝';
+    return table;
+}
+
+function generateFancyBio() {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-KE', { 
+        weekday: 'long', 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+    });
+    
+    const timeStr = now.toLocaleTimeString('en-KE', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
+    
+    const bios = [
+        `✨ ${config.BOT_NAME} ✦ Online ✦ ${dateStr} ✦`,
+        `⚡ Silva MD Active ✦ ${timeStr} ✦ ${dateStr} ✦`,
+        `💫 ${config.BOT_NAME} Operational ✦ ${dateStr} ✦`,
+        `🚀 Silva MD Live ✦ ${dateStr} ✦ ${timeStr} ✦`,
+        `🌟 ${config.BOT_NAME} Running ✦ ${dateStr} ✦`
+    ];
+    
+    return bios[Math.floor(Math.random() * bios.length)];
+}
+
+function isBotMentioned(message, botJid) {
+    if (!message || !botJid) return false;
+    
+    if (message.extendedTextMessage) {
+        const mentionedJids = message.extendedTextMessage.contextInfo?.mentionedJid || [];
+        return mentionedJids.includes(botJid);
+    }
+    
+    if (message.conversation) {
+        const botNumber = botJid.split('@')[0];
+        return message.conversation.includes(`@${botNumber}`);
+    }
+    
+    return false;
+}
 
 // AI Functions - COMPREHENSIVE FIX
 async function getAIResponse(jid, userMessage) {
@@ -216,7 +394,7 @@ async function connectToWhatsApp() {
                     logMessage('CRITICAL', '❌ Session logged out. Please rescan QR code.');
                 } else if (statusCode !== DisconnectReason.restartRequired) {
                     logMessage('INFO', 'Reconnecting...');
-                    setTimeout(() => connectToWhatsApp(), 2000);
+                    setTimeout(() => connectToWhatsApp(), 10000);
                 }
             } else if (connection === 'open') {
                 logMessage('SUCCESS', '✅ Connected to WhatsApp');
@@ -319,7 +497,6 @@ async function connectToWhatsApp() {
     }
 }
 
-// Profile Functions (unchanged)
 // Profile Functions
 async function updateProfileStatus(sock) {
     try {
