@@ -14,10 +14,10 @@ module.exports = {
     MODE: process.env.MODE || "both", // both, public, or private
     
     // AI Configuration
-    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || "your_deepseek_api_key_here",
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "your_openai_api_key_here",
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || "sk-904c57a88e754efea242835ef55e78bc",
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "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",
     PREFERRED_AI: process.env.PREFERRED_AI || "DEEPSEEK", // DEEPSEEK or OPENAI
-    MAX_HISTORY: process.env.MAX_HISTORY || 10, // Conversation memory length
+    MAX_HISTORY: process.env.MAX_HISTORY || 100, // Conversation memory length
     
     // Owner Information
     OWNER_NUMBER: process.env.OWNER_NUMBER || "254700143167",
