@@ -1,4 +1,4 @@
-// ✅ Silva AI WhatsApp Bot - Fixed Version with Queue & Backoff
+// ✅ Silva AI WhatsApp Bot - Multi-AI Failover Version
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
@@ -10,27 +10,46 @@ const os = require('os');
 const express = require('express');
 const P = require('pino');
 const axios = require('axios');
-const PQueue = require('p-queue'); // ✅ Rate Limiter
+const PQueue = require('p-queue');
 const config = require('./config.js');
 
 // ✅ Constants
 const prefix = config.PREFIX || '.';
 const tempDir = path.join(os.tmpdir(), 'silva-cache');
 const port = process.env.PORT || 25680;
-const pluginsDir = path.join(__dirname, 'plugins');
 const logDir = path.join(__dirname, 'logs');
 
-// ✅ AI Configuration
-const AI_PROVIDER = {
-    endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4o', 'gpt-4o-mini'], // ✅ fallback models
-    headers: { 'Authorization': `Bearer ${config.OPENAI_API_KEY}` }
-};
+// ✅ AI Providers
+const AI_PROVIDERS = [
+    {
+        name: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1/chat/completions',
+        models: ['gpt-4o', 'gpt-4o-mini'],
+        headers: { Authorization: `Bearer ${config.OPENAI_API_KEY}` }
+    },
+    {
+        name: 'Claude',
+        endpoint: 'https://api.anthropic.com/v1/messages',
+        models: ['claude-3-opus-20240229', 'claude-3-haiku-20240307'],
+        headers: {
+            Authorization: `Bearer ${config.CLAUDE_API_KEY}`,
+            'x-api-key': config.CLAUDE_API_KEY,
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01'
+        }
+    },
+    {
+        name: 'Gemini',
+        endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/',
+        models: ['gemini-pro'],
+        headers: { 'Content-Type': 'application/json' }
+    }
+];
 
-// ✅ Rate Limiter & Spam Control
-const aiQueue = new PQueue({ interval: 1000, intervalCap: 1 }); // 1 request/sec
-const userCooldown = new Map(); // { jid: timestamp }
-const COOLDOWN_MS = 5000; // 5 sec per user
+// ✅ Rate Limiter
+const aiQueue = new PQueue({ interval: 1000, intervalCap: 1 });
+const userCooldown = new Map();
+const COOLDOWN_MS = 5000;
 
 // ✅ Memory System
 class MemoryManager {
@@ -43,17 +62,12 @@ class MemoryManager {
         try {
             return fs.existsSync(this.memoryPath) ? 
                 JSON.parse(fs.readFileSync(this.memoryPath)) : {};
-        } catch (e) {
-            console.error('Memory load error:', e);
+        } catch {
             return {};
         }
     }
     saveMemory() {
-        try {
-            fs.writeFileSync(this.memoryPath, JSON.stringify(this.conversations, null, 2));
-        } catch (e) {
-            console.error('Memory save error:', e);
-        }
+        fs.writeFileSync(this.memoryPath, JSON.stringify(this.conversations, null, 2));
     }
     getConversation(jid) {
         return this.conversations[jid] || [];
@@ -61,215 +75,141 @@ class MemoryManager {
     addMessage(jid, role, content) {
         if (!this.conversations[jid]) this.conversations[jid] = [];
         this.conversations[jid].push({ role, content, timestamp: Date.now() });
-        if (this.conversations[jid].length > this.maxHistory) {
-            this.conversations[jid].shift();
-        }
-        this.saveMemory();
-    }
-    clearConversation(jid) {
-        delete this.conversations[jid];
+        if (this.conversations[jid].length > this.maxHistory) this.conversations[jid].shift();
         this.saveMemory();
     }
 }
 const memoryManager = new MemoryManager();
 
-// ✅ Global Context Info
-const globalContextInfo = {
-    forwardingScore: 999,
-    isForwarded: true,
-    forwardedNewsletterMessageInfo: {
-        newsletterJid: '120363200367779016@newsletter',
-        newsletterName: '◢◤ Silva Tech Inc ◢◤',
-        serverMessageId: 144
-    },
-    externalAdReply: {
-        title: `✦ ${config.BOT_NAME} ✦`,
-        body: "Powered by SilvaTechInc",
-        thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
-        sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
-        mediaType: 1,
-        renderLargerThumbnail: true
-    }
-};
-
-// ✅ Setup Directories
-if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
-if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-
-// ✅ Clean temp files periodically
-setInterval(() => {
-    fs.readdirSync(tempDir).forEach(file => fs.unlinkSync(path.join(tempDir, file)));
-}, 5 * 60 * 1000);
-
-// ✅ Logger Functions
+// ✅ Logging
 function getLogFileName() {
     const date = new Date();
-    return `messages-${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}.log`;
+    return `messages-${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}.log`;
 }
 function logMessage(type, message) {
-    if (!config.DEBUG && type === 'DEBUG') return;
     const timestamp = new Date().toISOString();
     const logEntry = `[${timestamp}] [${type}] ${message}\n`;
     console.log(logEntry.trim());
     fs.appendFileSync(path.join(logDir, getLogFileName()), logEntry);
 }
 
-// ✅ AI Response with Queue + Backoff
+// ✅ Multi-Provider AI Function
 async function getAIResponse(jid, userMessage) {
     return aiQueue.add(async () => {
-        try {
-            // ✅ Check Cooldown
-            const now = Date.now();
-            if (userCooldown.has(jid) && now - userCooldown.get(jid) < COOLDOWN_MS) {
-                return "⚠️ Please wait a few seconds before asking again.";
-            }
-            userCooldown.set(jid, now);
+        if (userCooldown.has(jid) && Date.now() - userCooldown.get(jid) < COOLDOWN_MS) {
+            return "⚠️ Slow down! Wait a few seconds.";
+        }
+        userCooldown.set(jid, Date.now());
 
-            const history = memoryManager.getConversation(jid);
-            const messages = [
-                { role: 'system', content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}.` },
-                ...history.map(msg => ({ role: msg.role, content: msg.content })),
-                { role: 'user', content: userMessage }
-            ];
+        const history = memoryManager.getConversation(jid);
+        const messages = [
+            { role: 'system', content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}.` },
+            ...history.map(m => ({ role: m.role, content: m.content })),
+            { role: 'user', content: userMessage }
+        ];
 
-            let aiResponse;
-            let lastError;
-
-            for (const model of AI_PROVIDER.models) {
+        for (const provider of AI_PROVIDERS) {
+            for (const model of provider.models) {
                 try {
-                    const response = await axios.post(AI_PROVIDER.endpoint, {
-                        model,
-                        messages,
-                        max_tokens: 1500,
-                        temperature: 0.7
-                    }, { headers: AI_PROVIDER.headers, timeout: 30000 });
+                    let payload, url, response;
 
-                    aiResponse = response.data.choices[0].message.content;
-                    break; // ✅ success
+                    if (provider.name === 'OpenAI') {
+                        url = provider.endpoint;
+                        payload = { model, messages, max_tokens: 1500, temperature: 0.7 };
+                        response = await axios.post(url, payload, { headers: provider.headers });
+                        const aiText = response.data.choices[0].message.content;
+                        memoryManager.addMessage(jid, 'user', userMessage);
+                        memoryManager.addMessage(jid, 'assistant', aiText);
+                        return aiText;
+                    }
+
+                    if (provider.name === 'Claude') {
+                        url = provider.endpoint;
+                        payload = {
+                            model,
+                            max_tokens: 1500,
+                            messages: messages.map(m => ({ role: m.role, content: [{ type: 'text', text: m.content }] }))
+                        };
+                        response = await axios.post(url, payload, { headers: provider.headers });
+                        const aiText = response.data.content[0].text;
+                        memoryManager.addMessage(jid, 'user', userMessage);
+                        memoryManager.addMessage(jid, 'assistant', aiText);
+                        return aiText;
+                    }
+
+                    if (provider.name === 'Gemini') {
+                        url = `${provider.endpoint}${model}:generateContent?key=${config.GEMINI_API_KEY}`;
+                        payload = { contents: [{ role: 'user', parts: [{ text: userMessage }] }] };
+                        response = await axios.post(url, payload, { headers: provider.headers });
+                        const aiText = response.data.candidates[0].content.parts[0].text;
+                        memoryManager.addMessage(jid, 'user', userMessage);
+                        memoryManager.addMessage(jid, 'assistant', aiText);
+                        return aiText;
+                    }
+
                 } catch (error) {
-                    lastError = error;
-                    const status = error.response?.status;
-
-                    if (status === 429) {
-                        logMessage('WARN', `Rate limit hit for ${model}, retrying in 5s...`);
-                        await new Promise(res => setTimeout(res, 5000));
-                    } else {
-                        logMessage('WARN', `Model ${model} failed: ${error.message}`);
+                    logMessage('WARN', `${provider.name} (${model}) failed: ${error.response?.status || error.message}`);
+                    if (error.response?.status === 429) {
+                        await new Promise(res => setTimeout(res, 5000)); // Retry delay
                     }
                 }
             }
-
-            if (!aiResponse) {
-                logMessage('ERROR', `OpenAI Failed: ${lastError?.message}`);
-                aiResponse = `⚠️ I'm currently overloaded. Please try again later.`;
-            }
-
-            memoryManager.addMessage(jid, 'user', userMessage);
-            memoryManager.addMessage(jid, 'assistant', aiResponse);
-
-            return aiResponse;
-        } catch (error) {
-            logMessage('ERROR', `AI Failed: ${error.message}`);
-            return "⚠️ Sorry, I'm unable to process your request right now.";
         }
+
+        return "⚠️ All AI providers are busy. Try again later.";
     });
 }
 
 // ✅ WhatsApp Connection
 async function connectToWhatsApp() {
-    try {
-        const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions'));
-        const { version } = await fetchLatestBaileysVersion();
+    const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions'));
+    const { version } = await fetchLatestBaileysVersion();
 
-        const sock = makeWASocket({
-            logger: P({ level: config.DEBUG ? 'debug' : 'silent' }),
-            printQRInTerminal: false,
-            browser: Browsers.macOS('Safari'),
-            auth: state,
-            version,
-            markOnlineOnConnect: config.ALWAYS_ONLINE,
-            syncFullHistory: false
-        });
+    const sock = makeWASocket({
+        logger: P({ level: config.DEBUG ? 'debug' : 'silent' }),
+        printQRInTerminal: false,
+        browser: Browsers.macOS('Safari'),
+        auth: state,
+        version,
+        markOnlineOnConnect: config.ALWAYS_ONLINE
+    });
 
-        sock.ev.on('connection.update', async update => {
-            const { connection, lastDisconnect } = update;
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                logMessage('WARN', `Connection closed: ${statusCode || 'Unknown'}`);
-                setTimeout(() => connectToWhatsApp(), 10000);
-            } else if (connection === 'open') {
-                logMessage('SUCCESS', '✅ Connected to WhatsApp');
-                await updateProfileStatus(sock);
-                await sendWelcomeMessage(sock);
-            }
-        });
+    sock.ev.on('connection.update', async update => {
+        const { connection } = update;
+        if (connection === 'open') {
+            logMessage('SUCCESS', '✅ Connected to WhatsApp');
+            await sock.updateProfileStatus(`✨ ${config.BOT_NAME} Online ✦ ${new Date().toLocaleString()}`);
+        } else if (connection === 'close') {
+            logMessage('WARN', 'Connection closed. Reconnecting...');
+            setTimeout(() => connectToWhatsApp(), 10000);
+        }
+    });
 
-        sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-            const m = messages[0];
-            if (!m.message) return;
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const m = messages[0];
+        if (!m.message) return;
+        const sender = m.key.remoteJid;
+        const messageType = Object.keys(m.message)[0];
+        let content = m.message[messageType]?.text || m.message[messageType]?.caption || '';
+        if (!content) return;
 
-            const sender = m.key.remoteJid;
-            const isGroup = isJidGroup(sender);
-            if (isGroup && !config.GROUP_COMMANDS) return;
-
-            const messageType = Object.keys(m.message)[0];
-            let content = '';
-            if (messageType === 'conversation') content = m.message.conversation;
-            else if (messageType === 'extendedTextMessage') content = m.message.extendedTextMessage.text || '';
-            else if (messageType === 'imageMessage') content = m.message.imageMessage.caption || '';
-            else if (messageType === 'videoMessage') content = m.message.videoMessage.caption || '';
-            if (!content) return;
-
-            if (config.READ_MESSAGE) await sock.readMessages([m.key]);
-
-            try {
-                const aiResponse = await getAIResponse(sender, content);
-                await sock.sendMessage(sender, { text: aiResponse, contextInfo: globalContextInfo }, { quoted: m });
-            } catch (err) {
-                logMessage('ERROR', `AI Processing Error: ${err.message}`);
-                await sock.sendMessage(sender, { text: "⚠️ AI error occurred.", contextInfo: globalContextInfo }, { quoted: m });
-            }
-        });
-
-        return sock;
-    } catch (e) {
-        logMessage('CRITICAL', `Connection failed: ${e.message}`);
-        setTimeout(() => connectToWhatsApp(), 10000);
-    }
-}
-
-async function updateProfileStatus(sock) {
-    const bio = `✨ ${config.BOT_NAME} Online ✦ ${new Date().toLocaleString()}`;
-    try {
-        await sock.updateProfileStatus(bio);
-        logMessage('SUCCESS', `✅ Bio updated: ${bio}`);
-    } catch (err) {
-        logMessage('ERROR', `❌ Failed to update bio: ${err.message}`);
-    }
-}
-
-async function sendWelcomeMessage(sock) {
-    await sock.sendMessage(sock.user.id, {
-        image: { url: config.ALIVE_IMG },
-        caption: `✅ ${config.BOT_NAME} is running!\nPowered by OpenAI.\nMode: ${config.MODE}`
+        try {
+            const aiResponse = await getAIResponse(sender, content);
+            await sock.sendMessage(sender, { text: aiResponse }, { quoted: m });
+        } catch (err) {
+            logMessage('ERROR', `Message Handling Error: ${err.message}`);
+        }
     });
 }
 
-// ✅ Express Server
+// ✅ Express
 const app = express();
-app.get('/', (req, res) => res.send(`✅ ${config.BOT_NAME} is Running!`));
-app.listen(port, () => logMessage('INFO', `🌐 Server running on port ${port}`));
+app.get('/', (_, res) => res.send(`✅ ${config.BOT_NAME} is running with multi-AI failover.`));
+app.listen(port, () => logMessage('INFO', `Server running on port ${port}`));
 
-// ✅ Start Bot
 (async () => {
-    try {
-        logMessage('INFO', '🚀 Starting Silva AI WhatsApp Bot...');
-        await connectToWhatsApp();
-    } catch (e) {
-        logMessage('CRITICAL', `Bot Init Failed: ${e.stack}`);
-        setTimeout(() => connectToWhatsApp(), 5000);
-    }
+    logMessage('INFO', '🚀 Starting Silva AI with Multi-AI Failover...');
+    await connectToWhatsApp();
 })();
