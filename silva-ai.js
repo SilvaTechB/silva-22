@@ -80,7 +80,7 @@ const memoryManager = new MemoryManager();
 
 // Global Context Info
 const globalContextInfo = {
-    forwardingScore: 999,
+    forwardingScore: 20,
     isForwarded: true,
     forwardedNewsletterMessageInfo: {
         newsletterJid: '120363200367779016@newsletter',
