@@ -1,120 +1,72 @@
-// ✅ Silva AI WhatsApp Bot - With Delayed Responses
 const { File: BufferFile } = require('node:buffer');
 global.File = BufferFile;
 
+// ✅ Silva Tech Inc Property 2025
 const baileys = require('@whiskeysockets/baileys');
-const { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, DisconnectReason, isJidGroup } = baileys;
+const { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, DisconnectReason, isJidGroup, isJidBroadcast, isJidStatusBroadcast, areJidsSameUser } = baileys;
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const express = require('express');
 const P = require('pino');
-const axios = require('axios');
-const Bottleneck = require('bottleneck');
 const config = require('./config.js');
 
-// Constants
+// OpenAI client
+const { Configuration, OpenAIApi } = require('openai');
+const openai = new OpenAIApi(new Configuration({
+    apiKey: config.OPENAI_API_KEY || process.env.OPENAI_API_KEY || ''
+}));
+
 const prefix = config.PREFIX || '.';
 const tempDir = path.join(os.tmpdir(), 'silva-cache');
 const port = process.env.PORT || 25680;
 const pluginsDir = path.join(__dirname, 'plugins');
+
+// ✅ Message Logger Setup
 const logDir = path.join(__dirname, 'logs');
-const RESPONSE_DELAY = 15000; // 15 seconds delay
-
-// ✅ OpenAI Configuration
-const AI_PROVIDER = {
-    endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4o', 'gpt-4o-mini'], // fallback models
-    headers: { 'Authorization': `Bearer ${config.OPENAI_API_KEY}` }
-};
-
-// Rate Limiter Configuration
-const openaiLimiter = new Bottleneck({
-  minTime: 2000, // minimum time between requests (2 seconds)
-  maxConcurrent: 1, // only 1 request at a time
-  reservoir: 3, // initial number of requests allowed
-  reservoirRefreshAmount: 3, // number of requests added per refresh
-  reservoirRefreshInterval: 60 * 1000, // refresh interval (1 minute)
-});
-
-// Memory System
-class MemoryManager {
-    constructor() {
-        this.memoryPath = path.join(__dirname, 'conversation_memory.json');
-        this.conversations = this.loadMemory();
-        this.maxHistory = config.MAX_HISTORY || 1000;
-    }
-    loadMemory() {
-        try {
-            return fs.existsSync(this.memoryPath) ? 
-                JSON.parse(fs.readFileSync(this.memoryPath)) : {};
-        } catch (e) {
-            console.error('Memory load error:', e);
-            return {};
-        }
-    }
-    saveMemory() {
-        try {
-            fs.writeFileSync(this.memoryPath, JSON.stringify(this.conversations, null, 2));
-        } catch (e) {
-            console.error('Memory save error:', e);
-        }
-    }
-    getConversation(jid) {
-        return this.conversations[jid] || [];
-    }
-    addMessage(jid, role, content) {
-        if (!this.conversations[jid]) this.conversations[jid] = [];
-        this.conversations[jid].push({ role, content, timestamp: Date.now() });
-        if (this.conversations[jid].length > this.maxHistory) {
-            this.conversations[jid].shift();
-        }
-        this.saveMemory();
-    }
-    clearConversation(jid) {
-        delete this.conversations[jid];
-        this.saveMemory();
-    }
-}
-const memoryManager = new MemoryManager();
-
-// Global Context Info
-const globalContextInfo = {
-    forwardingScore: 20,
-    isForwarded: true,
-    forwardedNewsletterMessageInfo: {
-        newsletterJid: '120363200367779016@newsletter',
-        newsletterName: '◢◤ Silva AI ◢◤',
-        serverMessageId: 144
-    },
-    externalAdReply: {
-        title: `✦ ${config.BOT_NAME} ✦`,
-        body: "Powered by SilvaTechInc",
-        thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
-        sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
-        mediaType: 1,
-        renderLargerThumbnail: true
-    }
-};
-
-// Setup Directories
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
-if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// Logger Functions
 function getLogFileName() {
     const date = new Date();
     return `messages-${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}.log`;
 }
+
 function logMessage(type, message) {
     if (!config.DEBUG && type === 'DEBUG') return;
+    
     const timestamp = new Date().toISOString();
     const logEntry = `[${timestamp}] [${type}] ${message}\n`;
+    
+    // Log to console
     console.log(logEntry.trim());
-    fs.appendFileSync(path.join(logDir, getLogFileName()), logEntry);
+    
+    // Log to file
+    const logFile = path.join(logDir, getLogFileName());
+    fs.appendFileSync(logFile, logEntry);
 }
 
-// Load Plugins
+// ✅ Global Context Info
+const globalContextInfo = {
+    forwardingScore: 999,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+        newsletterJid: '120363200367779016@newsletter',
+        newsletterName: '◢◤ Silva Tech Inc ◢◤',
+        serverMessageId: 144
+    }
+};
+
+// ✅ Ensure Temp Directory Exists
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+setInterval(() => {
+    try {
+        fs.readdirSync(tempDir).forEach(file => {
+            try { fs.unlinkSync(path.join(tempDir, file)); } catch(e) {}
+        });
+    } catch(e) {}
+}, 5 * 60 * 1000);
+
+// ✅ Load Plugins
 let plugins = new Map();
 function loadPlugins() {
     if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
@@ -129,7 +81,7 @@ function loadPlugins() {
 }
 loadPlugins();
 
-// Session Setup
+// ✅ Setup Session from Mega.nz
 async function setupSession() {
     const sessionPath = path.join(__dirname, 'sessions', 'creds.json');
     if (!fs.existsSync(sessionPath)) {
@@ -157,161 +109,96 @@ async function setupSession() {
     }
 }
 
-// ✅ Enhanced AI Response Function with Delay
-async function getAIResponse(jid, userMessage) {
-    try {
-        // Add artificial delay before processing
-        await new Promise(resolve => setTimeout(resolve, RESPONSE_DELAY));
+// ✅ Generate Config Table
+function generateConfigTable() {
+    const configs = [
+        { name: 'MODE', value: config.MODE },
+        { name: 'ANTIDELETE_GROUP', value: config.ANTIDELETE_GROUP },
+        { name: 'ANTIDELETE_PRIVATE', value: config.ANTIDELETE_PRIVATE },
+        { name: 'AUTO_STATUS_SEEN', value: config.AUTO_STATUS_SEEN },
+        { name: 'AUTO_STATUS_REACT', value: config.AUTO_STATUS_REACT },
+        { name: 'AUTO_STATUS_REPLY', value: config.AUTO_STATUS_REPLY },
+        { name: 'AUTO_REACT_NEWSLETTER', value: config.AUTO_REACT_NEWSLETTER },
+        { name: 'ANTI_LINK', value: config.ANTI_LINK },
+        { name: 'ALWAYS_ONLINE', value: config.ALWAYS_ONLINE },
+        { name: 'GROUP_COMMANDS', value: config.GROUP_COMMANDS }
+    ];
 
-        const history = memoryManager.getConversation(jid);
-        const messages = [
-            {
-                role: 'system',
-                content: `You are Silva AI, a helpful WhatsApp assistant. Current date: ${new Date().toLocaleDateString()}.`
-            },
-            ...history.map(msg => ({ role: msg.role, content: msg.content })),
-            { role: 'user', content: userMessage }
-        ];
+    let table = '╔══════════════════════════╦═══════════╗\n';
+    table += '║        Config Name       ║   Value   ║\n';
+    table += '╠══════════════════════════╬═══════════╣\n';
 
-        let aiResponse;
-        let lastError;
-        
-        for (const model of AI_PROVIDER.models) {
-            try {
-                const response = await openaiLimiter.schedule(() => 
-                    axios.post(AI_PROVIDER.endpoint, {
-                        model,
-                        messages,
-                        max_tokens: 1500,
-                        temperature: 0.7
-                    }, { 
-                        headers: AI_PROVIDER.headers,
-                        timeout: 30000
-                    })
-                );
-
-                aiResponse = response.data.choices[0].message.content;
-                break; // success
-            } catch (error) {
-                lastError = error;
-                logMessage('WARN', `OpenAI model error (${model}): ${error.message}`);
-                
-                // If rate limited, wait before trying next model
-                if (error.response?.status === 429) {
-                    const retryAfter = error.response.headers['retry-after'] || 20;
-                    logMessage('INFO', `⏳ Rate limited - waiting ${retryAfter} seconds`);
-                    await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-                }
-            }
-        }
-
-        if (!aiResponse) {
-            throw lastError || new Error('All OpenAI models failed.');
-        }
-
-        memoryManager.addMessage(jid, 'user', userMessage);
-        memoryManager.addMessage(jid, 'assistant', aiResponse);
-
-        return aiResponse;
-    } catch (error) {
-        logMessage('ERROR', `AI Failed: ${error.message}`);
-        return "⚠️ I'm currently processing many requests. Please wait a moment and try again.";
+    for (const cfg of configs) {
+        const paddedName = cfg.name.padEnd(24, ' ');
+        const paddedValue = String(cfg.value).padEnd(9, ' ');
+        table += `║ ${paddedName} ║ ${paddedValue} ║\n`;
     }
+
+    table += '╚══════════════════════════╩═══════════╝';
+    return table;
 }
 
-// WhatsApp Connection
-async function connectToWhatsApp() {
-    try {
-        await setupSession();
-        const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions'));
-        const { version } = await fetchLatestBaileysVersion();
-
-        const sock = makeWASocket({
-            logger: P({ level: config.DEBUG ? 'debug' : 'silent' }),
-            printQRInTerminal: false,
-            browser: Browsers.macOS('Safari'),
-            auth: state,
-            version,
-            markOnlineOnConnect: config.ALWAYS_ONLINE,
-            syncFullHistory: false
-        });
-
-        sock.ev.on('connection.update', async update => {
-            const { connection, lastDisconnect } = update;
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                logMessage('WARN', `Connection closed: ${statusCode || 'Unknown'}`);
-                if (statusCode === DisconnectReason.loggedOut) {
-                    logMessage('CRITICAL', '❌ Session logged out. Please rescan QR code.');
-                } else {
-                    logMessage('INFO', 'Reconnecting...');
-                    setTimeout(() => connectToWhatsApp(), 10000);
-                }
-            } else if (connection === 'open') {
-                logMessage('SUCCESS', '✅ Connected to WhatsApp');
-                global.botJid = sock.user.id;
-                await updateProfileStatus(sock);
-                await sendWelcomeMessage(sock);
-            }
-        });
-
-        sock.ev.on('creds.update', saveCreds);
-
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-            const m = messages[0];
-            if (!m.message) return;
-
-            const sender = m.key.remoteJid;
-            const isGroup = isJidGroup(sender);
-
-            // Skip if group commands disabled
-            if (isGroup && !config.GROUP_COMMANDS) return;
-
-            const messageType = Object.keys(m.message)[0];
-            let content = '';
-            if (messageType === 'conversation') content = m.message.conversation;
-            else if (messageType === 'extendedTextMessage') content = m.message.extendedTextMessage.text || '';
-            else if (messageType === 'imageMessage') content = m.message.imageMessage.caption || '';
-            else if (messageType === 'videoMessage') content = m.message.videoMessage.caption || '';
-
-            if (!content) return;
-
-            try {
-                // Process message and get response
-                const aiResponse = await getAIResponse(sender, content);
-                
-                // Send response
-                await sock.sendMessage(
-                    sender, 
-                    { text: aiResponse, contextInfo: globalContextInfo }, 
-                    { quoted: m }
-                );
-                
-                // Mark as read only after responding
-                if (config.READ_MESSAGE) {
-                    await sock.readMessages([m.key]);
-                }
-            } catch (err) {
-                logMessage('ERROR', `AI Processing Error: ${err.message}`);
-                await sock.sendMessage(
-                    sender, 
-                    { text: "⚠️ I'm currently processing your request. Please wait...", contextInfo: globalContextInfo }, 
-                    { quoted: m }
-                );
-            }
-        });
-
-        return sock;
-    } catch (e) {
-        logMessage('CRITICAL', `Connection failed: ${e.message}`);
-        setTimeout(() => connectToWhatsApp(), 10000);
-    }
+// ✅ Fancy Bio Generator
+function generateFancyBio() {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-KE', { 
+        weekday: 'long', 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+    });
+    
+    const timeStr = now.toLocaleTimeString('en-KE', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
+    
+    const bios = [
+        `✨ ${config.BOT_NAME} ✦ Online ✦ ${dateStr} ✦`,
+        `⚡ Silva MD Active ✦ ${timeStr} ✦ ${dateStr} ✦`,
+        `💫 ${config.BOT_NAME} Operational ✦ ${dateStr} ✦`,
+        `🚀 Silva MD Live ✦ ${dateStr} ✦ ${timeStr} ✦`,
+        `🌟 ${config.BOT_NAME} Running ✦ ${dateStr} ✦`
+    ];
+    
+    return bios[Math.floor(Math.random() * bios.length)];
 }
 
+// ✅ Welcome Message with Config Status
+async function sendWelcomeMessage(sock) {
+    const configTable = generateConfigTable();
+    
+    const welcomeMsg = `*Hello ✦ ${config.BOT_NAME} ✦ User!*\n\n` +
+        `✅ Silva MD Bot is now active!\n\n` +
+        `*Prefix:* ${prefix}\n` +
+        `*Mode:* ${config.MODE}\n` +
+        `*Plugins Loaded:* ${plugins.size}\n\n` +
+        `*⚙️ Configuration Status:*\n\`\`\`${configTable}\`\`\`\n\n` +
+        `*Description:* ${config.DESCRIPTION}\n\n` +
+        `⚡ Powered by Silva Tech Inc\nGitHub: https://github.com/SilvaTechB/silva-md-bot`;
+
+    await sock.sendMessage(sock.user.id, {
+        image: { url: config.ALIVE_IMG },
+        caption: welcomeMsg,
+        contextInfo: {
+            ...globalContextInfo,
+            externalAdReply: {
+                title: `✦ ${config.BOT_NAME} ✦ Official`,
+                body: "Your bot is live with enhanced features!",
+                thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
+                sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
+                mediaType: 1,
+                renderLargerThumbnail: true
+            }
+        }
+    });
+}
+
+// ✅ Update Profile Status
 async function updateProfileStatus(sock) {
-    const bio = `✨ ${config.BOT_NAME} Online ✦ ${new Date().toLocaleString()}`;
     try {
+        const bio = generateFancyBio();
         await sock.updateProfileStatus(bio);
         logMessage('SUCCESS', `✅ Bio updated: ${bio}`);
     } catch (err) {
@@ -319,25 +206,245 @@ async function updateProfileStatus(sock) {
     }
 }
 
-async function sendWelcomeMessage(sock) {
-    await sock.sendMessage(sock.user.id, {
-        image: { url: config.ALIVE_IMG },
-        caption: `✅ ${config.BOT_NAME} is running!\nPowered by OpenAI.\nMode: ${config.MODE}`
-    });
+// ✅ Enhanced Group Message Handling
+function isBotMentioned(message, botJid) {
+    if (!message || !botJid) return false;
+    
+    if (message.extendedTextMessage) {
+        const mentionedJids = message.extendedTextMessage.contextInfo?.mentionedJid || [];
+        return mentionedJids.includes(botJid);
+    }
+    
+    if (message.conversation) {
+        const botNumber = botJid.split('@')[0];
+        return message.conversation.includes(`@${botNumber}`);
+    }
+    
+    return false;
 }
 
-// Express Server
-const app = express();
-app.get('/', (req, res) => res.send(`✅ ${config.BOT_NAME} is Running!`));
-app.listen(port, () => logMessage('INFO', `🌐 Server running on port ${port}`));
+// -----------------------------
+// ✅ AI Memory & Helpers
+// -----------------------------
+let chatMemory = {}; // { chatId: [{role, content, timestamp}] }
+const MEMORY_EXPIRY = 48 * 60 * 60 * 1000; // 48 hours
 
-// Start Bot
-(async () => {
-    try {
-        logMessage('INFO', '🚀 Starting Silva AI WhatsApp Bot...');
-        await connectToWhatsApp();
-    } catch (e) {
-        logMessage('CRITICAL', `Bot Init Failed: ${e.stack}`);
-        setTimeout(() => connectToWhatsApp(), 5000);
+function updateMemory(chatId, role, content) {
+    if (!chatMemory[chatId]) chatMemory[chatId] = [];
+    chatMemory[chatId].push({ role, content, timestamp: Date.now() });
+    // Purge older than 48h
+    chatMemory[chatId] = chatMemory[chatId].filter(m => (Date.now() - m.timestamp) <= MEMORY_EXPIRY);
+}
+
+// Periodic memory cleanup
+setInterval(() => {
+    const now = Date.now();
+    for (const key of Object.keys(chatMemory)) {
+        chatMemory[key] = chatMemory[key].filter(m => (now - m.timestamp) <= MEMORY_EXPIRY);
+        if (chatMemory[key].length === 0) delete chatMemory[key];
     }
-})();
+}, 60 * 60 * 1000); // hourly
+
+// Build system prompt
+function buildSystemPrompt() {
+    return [
+        {
+            role: 'system',
+            content: `You are Silva AI, developed by Silva Tech Inc. You are a modern conversational assistant similar to ChatGPT but branded as Silva AI. Your source code is hosted at https://github.com/SilvaTechB. For contact, use the following numbers: +254700143167, +254755257907, +254743706010. Always be helpful, concise, and polite. When answering, don't reveal internal mechanics or private logs. Prefer clarity and safety.`
+        }
+    ];
+}
+
+// Compose messages to send to OpenAI
+function composeMessagesForOpenAI(chatId, incomingUserText) {
+    const base = buildSystemPrompt();
+    const memory = (chatMemory[chatId] || []).map(m => ({ role: m.role, content: m.content }));
+    // Combine memory, then the new user message
+    const messages = [
+        ...base,
+        ...memory,
+        { role: 'user', content: incomingUserText }
+    ];
+    return messages;
+}
+
+// Send AI reply (and attach context info + externalAdReply)
+async function sendAIReply(sock, to, quotedMessage, aiText) {
+    try {
+        await sock.sendMessage(to, {
+            text: aiText,
+            contextInfo: {
+                ...globalContextInfo,
+                externalAdReply: {
+                    title: `Silva AI — Silva Tech Inc`,
+                    body: "A modern conversational AI — 48h memory",
+                    thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
+                    sourceUrl: "https://github.com/SilvaTechB",
+                    mediaType: 1,
+                    renderLargerThumbnail: true
+                }
+            }
+        }, { quoted: quotedMessage });
+    } catch (err) {
+        logMessage('ERROR', `Failed to send AI reply: ${err.message}`);
+    }
+}
+
+// -----------------------------
+// ✅ Connect to WhatsApp
+// -----------------------------
+async function connectToWhatsApp() {
+    await setupSession();
+    const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions'));
+    const { version } = await fetchLatestBaileysVersion();
+
+    const cryptoOptions = {
+        maxSharedKeys: 1000,
+        sessionThreshold: 0,
+        cache: {
+            TRANSACTION: false,
+            PRE_KEYS: false
+        }
+    };
+
+    const sock = makeWASocket({
+        logger: P({ level: config.DEBUG ? 'debug' : 'silent' }),
+        printQRInTerminal: false,
+        browser: Browsers.macOS('Safari'),
+        auth: state,
+        version,
+        markOnlineOnConnect: config.ALWAYS_ONLINE,
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+        getMessage: async () => undefined,
+        ...cryptoOptions
+    });
+
+    sock.ev.on('connection.update', async update => {
+        const { connection, lastDisconnect } = update;
+        if (connection === 'close') {
+            logMessage('WARN', `Connection closed: ${lastDisconnect?.error?.output?.statusCode || 'Unknown'}`);
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+                logMessage('INFO', 'Reconnecting...');
+                setTimeout(() => connectToWhatsApp(), 2000);
+            }
+        } else if (connection === 'open') {
+            logMessage('SUCCESS', '✅ Connected to WhatsApp');
+            global.botJid = sock.user.id;
+            await updateProfileStatus(sock);
+            await sendWelcomeMessage(sock);
+        }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    // Anti-Delete
+    sock.ev.on('messages.update', async (updates) => {
+        for (const update of updates) {
+            if (update.update.messageStubType === 7) {
+                try {
+                    const key = update.key;
+                    const from = key.remoteJid;
+                    const isGroup = isJidGroup(from);
+                    
+                    logMessage('EVENT', `Anti-Delete triggered in ${isGroup ? 'group' : 'private'}: ${from}`);
+                    
+                    if ((isGroup && config.ANTIDELETE_GROUP) || (!isGroup && config.ANTIDELETE_PRIVATE)) {
+                        const deletedMessage = await sock.loadMessage(key);
+                        if (!deletedMessage) {
+                            logMessage('WARN', 'Could not load deleted message');
+                            return;
+                        }
+                        
+                        const ownerJid = `${config.OWNER_NUMBER}@s.whatsapp.net`;
+                        const sender = update.participant || key.participant || key.remoteJid;
+                        const senderName = sender.split('@')[0];
+                        
+                        let caption = `⚠️ *Anti-Delete Alert!*\n\n` +
+                            `👤 *Sender:* @${senderName}\n` +
+                            `💬 *Restored Message:*\n\n` +
+                            `*Chat:* ${isGroup ? 'Group' : 'Private'}`;
+                        
+                        let messageOptions = {
+                            contextInfo: {
+                                mentionedJid: [sender],
+                                ...globalContextInfo,
+                                externalAdReply: {
+                                    title: "Silva MD Anti-Delete",
+                                    body: "Message restored privately",
+                                    thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
+                                    sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
+                                    mediaType: 1,
+                                    renderLargerThumbnail: true
+                                }
+                            }
+                        };
+                        
+                        let msgContent = '';
+                        if (deletedMessage.message?.conversation) {
+                            msgContent = deletedMessage.message.conversation;
+                        } else if (deletedMessage.message?.extendedTextMessage) {
+                            msgContent = deletedMessage.message.extendedTextMessage.text;
+                        } else if (deletedMessage.message?.imageMessage) {
+                            msgContent = '[Image] ' + (deletedMessage.message.imageMessage.caption || '');
+                        } else if (deletedMessage.message?.videoMessage) {
+                            msgContent = '[Video] ' + (deletedMessage.message.videoMessage.caption || '');
+                        } else if (deletedMessage.message?.documentMessage) {
+                            msgContent = '[Document] ' + (deletedMessage.message.documentMessage.fileName || '');
+                        } else {
+                            msgContent = '[Unsupported Type]';
+                        }
+                        
+                        logMessage('INFO', `Restoring message: ${msgContent.substring(0, 100)}`);
+                        
+                        if (deletedMessage.message?.conversation) {
+                            await sock.sendMessage(ownerJid, {
+                                text: `${caption}\n\n${deletedMessage.message.conversation}`,
+                                ...messageOptions
+                            });
+                        } else if (deletedMessage.message?.extendedTextMessage) {
+                            await sock.sendMessage(ownerJid, {
+                                text: `${caption}\n\n${deletedMessage.message.extendedTextMessage.text}`,
+                                ...messageOptions
+                            });
+                        } else if (deletedMessage.message?.imageMessage) {
+                            const buffer = await sock.downloadMediaMessage(deletedMessage);
+                            await sock.sendMessage(ownerJid, {
+                                image: buffer,
+                                caption: `${caption}\n\n${deletedMessage.message.imageMessage.caption || ''}`,
+                                ...messageOptions
+                            });
+                        } else if (deletedMessage.message?.videoMessage) {
+                            const buffer = await sock.downloadMediaMessage(deletedMessage);
+                            await sock.sendMessage(ownerJid, {
+                                video: buffer,
+                                caption: `${caption}\n\n${deletedMessage.message.videoMessage.caption || ''}`,
+                                ...messageOptions
+                            });
+                        } else if (deletedMessage.message?.documentMessage) {
+                            const buffer = await sock.downloadMediaMessage(deletedMessage);
+                            await sock.sendMessage(ownerJid, {
+                                document: buffer,
+                                mimetype: deletedMessage.message.documentMessage.mimetype,
+                                fileName: deletedMessage.message.documentMessage.fileName || 'Restored-File',
+                                caption,
+                                ...messageOptions
+                            });
+                        } else {
+                            await sock.sendMessage(ownerJid, {
+                                text: `${caption}\n\n[Unsupported Message Type]`,
+                                ...messageOptions
+                            });
+                        }
+                        
+                        logMessage('SUCCESS', 'Anti-Delete message sent to owner');
+                    }
+                } catch (err) {
+                    logMessage('ERROR', `Anti-Delete Error: ${err.message}`);
+                }
+            }
+        }
+    });
+
+    // Auto Status handlers
+    sock.ev.on('stat
