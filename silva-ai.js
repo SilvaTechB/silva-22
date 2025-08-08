@@ -24,7 +24,7 @@ const RESPONSE_DELAY = 15000; // 15 seconds delay
 // ✅ OpenAI Configuration
 const AI_PROVIDER = {
     endpoint: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-3.5-turbo', 'gpt-4'], // fallback models
+    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.5', 'o1', 'o1-mini', 'o3', 'o4-mini'], // fallback models
     headers: { 'Authorization': `Bearer ${config.OPENAI_API_KEY}` }
 };
 
