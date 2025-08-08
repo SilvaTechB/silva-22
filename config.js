@@ -31,7 +31,7 @@ module.exports = {
     // Auto-Response Settings
     LIVE_MSG: process.env.LIVE_MSG || "⚡ *Silva AI is active and ready to assist you!*",
     AUTO_STATUS_MSG: process.env.AUTO_STATUS_MSG || "👀 Seen by Silva AI",
-    AUTO_REPLY: convertToBool(process.env.AUTO_REPLY, "true"),
+    AUTO_CHATBOT: convertToBool(process.env.AUTO_CHATBOT, "true"),
     READ_MESSAGE: convertToBool(process.env.READ_MESSAGE, "true"),
     
     // Reaction Settings
